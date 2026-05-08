@@ -1,7 +1,7 @@
 # Trade Confirmation Bot
 
 [![Unit tests](https://github.com/mikeacjones/reddit-trade-confirmation-bot-devvit/actions/workflows/devvit-test.yml/badge.svg)](https://github.com/mikeacjones/reddit-trade-confirmation-bot-devvit/actions/workflows/devvit-test.yml)
-![Coverage](https://img.shields.io/badge/coverage-not%20configured-lightgrey)
+![Coverage](https://img.shields.io/badge/coverage-84.01%25-brightgreen)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A Reddit Devvit app that tracks completed trades for swap subreddits. When two users confirm a trade in the monthly thread, the bot replies and bumps each user's trade count via flair.
