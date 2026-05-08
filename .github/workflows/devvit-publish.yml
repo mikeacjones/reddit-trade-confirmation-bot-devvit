@@ -5,6 +5,8 @@ on:
   push:
     branches: [main]
     paths:
+      - "assets/**"
+      - "devvit.json"
       - "README.md"
       - "package-lock.json"
       - "package.json"

@@ -1,6 +1,7 @@
 import { Devvit } from '@devvit/public-api'
 import {
   adjustUserTradeCount,
+  approveConfirmationFromComment,
   importExistingFlairCounts,
   onCommentSubmit,
   onMonthlyPost,
@@ -119,6 +120,21 @@ Devvit.addMenuItem({
     ctx.ui.showToast(
       `Imported ${result.imported}; kept ${result.skippedExisting} existing Redis counts; skipped ${result.skippedUnparseable}`,
     )
+  },
+})
+
+Devvit.addMenuItem({
+  label: 'Approve trade confirmation',
+  location: 'comment',
+  forUserType: 'moderator',
+  onPress: async (event, ctx) => {
+    try {
+      const result = await approveConfirmationFromComment(ctx, event.targetId)
+      ctx.ui.showToast(result.message)
+    } catch (error) {
+      console.warn(`Failed to approve trade confirmation: ${error instanceof Error ? error.message : String(error)}`)
+      ctx.ui.showToast(error instanceof Error ? error.message : 'Failed to approve trade confirmation')
+    }
   },
 })
 

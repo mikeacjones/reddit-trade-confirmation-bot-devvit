@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { adjustUserTradeCount, importExistingFlairCounts, onCommentSubmit, onMonthlyPost } from '../src/handlers'
+import {
+  adjustUserTradeCount,
+  approveConfirmationFromComment,
+  importExistingFlairCounts,
+  onCommentSubmit,
+  onMonthlyPost,
+} from '../src/handlers'
 
 function mockRedis(initial: Record<string, string> = {}) {
   const store = new Map(Object.entries(initial))
@@ -116,20 +122,39 @@ function mockConfirmationContext(initial: Record<string, string> = {}) {
       get: vi.fn(async () => undefined),
     },
     reddit: {
+      getCurrentSubreddit: vi.fn(async () => ({ name: 'PlasticModelExchange' })),
       getPostById: vi.fn(async () => ({
         id: 't3_post',
         authorId: 't2_bot',
         locked: false,
       })),
       getAppUser: vi.fn(async () => ({ id: 't2_bot', username: 'swap-conf-bot' })),
-      getCommentById: vi.fn(async () => ({
-        id: 't1_parent',
-        parentId: 't3_post',
-        authorName: 'seller',
-        authorFlair: { text: 'Trades: 4' },
-        body: 'sold to u/buyer',
-        removed: false,
-      })),
+      getCommentById: vi.fn(async (id: string) => {
+        if (id === 't1_confirm') {
+          return {
+            id: 't1_confirm',
+            parentId: 't1_parent',
+            postId: 't3_post',
+            subredditName: 'PlasticModelExchange',
+            authorName: 'buyer',
+            authorFlair: { text: 'Trades: 2' },
+            body: 'confirmed',
+            permalink: 'https://reddit.test/r/PlasticModelExchange/comments/post/_/confirm',
+            removed: false,
+          }
+        }
+        return {
+          id: 't1_parent',
+          parentId: 't3_post',
+          postId: 't3_post',
+          subredditName: 'PlasticModelExchange',
+          authorName: 'seller',
+          authorFlair: { text: 'Trades: 4' },
+          body: 'sold to u/buyer',
+          permalink: 'https://reddit.test/r/PlasticModelExchange/comments/post/_/parent',
+          removed: false,
+        }
+      }),
       getSubredditByName: vi.fn(async () => ({})),
       setUserFlair,
       setUserFlairBatch,
@@ -460,5 +485,50 @@ describe('onCommentSubmit', () => {
     expect(redis.store.get('confirmations:seller')).toBe('5')
     expect(redis.store.get('confirmations:buyer')).toBe('3')
     expect(setUserFlair).not.toHaveBeenCalled()
+  })
+})
+
+describe('approveConfirmationFromComment', () => {
+  it('manually approves a selected confirmation comment', async () => {
+    const { ctx, redis, setUserFlair, submitComment } = mockConfirmationContext()
+
+    const result = await approveConfirmationFromComment(ctx, 't1_confirm')
+
+    expect(result).toEqual(expect.objectContaining({
+      approved: true,
+      parentAuthor: 'seller',
+      confirmer: 'buyer',
+      parentCommentId: 't1_parent',
+    }))
+    const record = JSON.parse(redis.store.get('confirmed:t1_parent') ?? '{}')
+    expect(record).toEqual(expect.objectContaining({
+      commentId: 't1_confirm',
+      replyToCommentId: 't1_confirm',
+      parentAuthor: 'seller',
+      confirmer: 'buyer',
+      modApproval: true,
+      parentCount: 5,
+      confirmerCount: 3,
+    }))
+    expect(redis.store.get('confirmations:seller')).toBe('5')
+    expect(redis.store.get('confirmations:buyer')).toBe('3')
+    expect(setUserFlair).toHaveBeenCalledTimes(2)
+    expect(submitComment).toHaveBeenCalledWith(expect.objectContaining({
+      id: 't1_confirm',
+    }))
+  })
+
+  it('does not approve a top-level comment', async () => {
+    const { ctx, redis, setUserFlair, submitComment } = mockConfirmationContext()
+
+    const result = await approveConfirmationFromComment(ctx, 't1_parent')
+
+    expect(result.approved).toBe(false)
+    expect(result.message).toContain('top-level comment')
+    expect(redis.store.get('confirmed:t1_parent')).toBeUndefined()
+    expect(redis.store.get('confirmations:seller')).toBe('4')
+    expect(redis.store.get('confirmations:buyer')).toBe('2')
+    expect(setUserFlair).not.toHaveBeenCalled()
+    expect(submitComment).not.toHaveBeenCalled()
   })
 })
