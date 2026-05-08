@@ -33,6 +33,19 @@ interface ProcessableComment {
   permalink: string
 }
 
+interface FetchedComment {
+  id: string
+  parentId: string
+  postId: string
+  subredditName: string
+  authorName: string
+  authorFlair: string | null
+  removed: boolean
+  isRoot: boolean
+  body: string
+  permalink: string
+}
+
 interface ConfirmationParticipant {
   username: string
   usernameLower: string
@@ -63,6 +76,14 @@ interface ConfirmationClaimRecord {
   parentCount: number
   confirmerCount: number
   createdAt: string
+}
+
+export interface ManualApprovalResult {
+  approved: boolean
+  message: string
+  parentAuthor?: string
+  confirmer?: string
+  parentCommentId?: string
 }
 
 export async function onCommentSubmit(event: CommentSubmit, ctx: TriggerContext): Promise<void> {
@@ -133,8 +154,8 @@ async function processCommentOnce(
   const isCurrent = submission.id === (await ctx.redis.get('currentMonthlyPost'))
   const isModerator = await isUserModerator(ctx, subredditName, comment.author)
 
-  const parent = await fetchParent(ctx, comment.parentId)
-  const grandparent = shouldFetchGrandparent(comment, parent) ? await fetchParent(ctx, parent.parentId) : null
+  const parent = await fetchComment(ctx, comment.parentId)
+  const grandparent = shouldFetchGrandparent(comment, parent) ? await fetchComment(ctx, parent.parentId) : null
 
   const result = evaluateConfirmation(
     {
@@ -168,42 +189,105 @@ async function processCommentOnce(
     return true
   }
 
-  const flairTemplates = await loadFlairTemplates(ctx, subredditName)
-  const participants = await loadConfirmationParticipants(
+  const completion = await completeConfirmation(
     ctx,
     subredditName,
-    result.parentAuthor!,
-    result.confirmer!,
+    comment,
+    result,
     oldFlairHints(comment, result, parent, grandparent),
   )
-  const commit = await commitConfirmation(ctx, comment, result, participants.parent, participants.confirmer)
-  if (!commit.committed) {
+  if (!completion.approved) {
     console.debug(`Rejecting ${comment.id}: parent comment ${result.parentCommentId} already claimed`)
     await replyWithReason(ctx, comment, 'already_confirmed', result)
     return true
   }
-  console.debug(`Committed confirmation ${result.parentCommentId} from comment ${comment.id}`)
-
-  const parentResult = await applyCommittedFlair(ctx, subredditName, commit.parent, flairTemplates)
-  const confirmerResult = await applyCommittedFlair(ctx, subredditName, commit.confirmer, flairTemplates)
-
-  const replyTo = result.replyToCommentId ?? comment.id
-  const replyBody = render(await getTemplate(ctx, 'trade_confirmation'), {
-    comment_id: replyTo,
-    confirmer: result.confirmer ?? '',
-    parent_author: result.parentAuthor ?? '',
-    old_comment_flair: confirmerResult.oldFlair ?? 'unknown',
-    new_comment_flair: confirmerResult.newFlair ?? 'unknown',
-    old_parent_flair: parentResult.oldFlair ?? 'unknown',
-    new_parent_flair: parentResult.newFlair ?? 'unknown',
-  })
-  await trySubmitCommentWithRetry(ctx, replyTo, replyBody)
-  console.debug(
-    `Confirmed ${result.parentCommentId}: u/${result.parentAuthor} ${parentResult.oldFlair ?? 'none'} -> ` +
-    `${parentResult.newFlair ?? 'unchanged'}, u/${result.confirmer} ${confirmerResult.oldFlair ?? 'none'} -> ` +
-    `${confirmerResult.newFlair ?? 'unchanged'}`,
-  )
   return true
+}
+
+export async function approveConfirmationFromComment(
+  ctx: TriggerContext,
+  commentId: string,
+): Promise<ManualApprovalResult> {
+  if (!commentId.startsWith('t1_')) {
+    return { approved: false, message: 'Select a confirmation comment to approve' }
+  }
+
+  const target = await fetchComment(ctx, commentId)
+  if (!target) {
+    return { approved: false, message: 'Select a confirmation comment to approve' }
+  }
+  const subredditName = target.subredditName
+  if (target.isRoot) {
+    return { approved: false, message: 'Select a reply to a trade comment, not a top-level comment' }
+  }
+  if (!target.authorName) {
+    return { approved: false, message: 'Selected comment has no processable author' }
+  }
+  if (!target.body.toLowerCase().includes('confirmed')) {
+    return { approved: false, message: 'Selected comment does not look like a confirmation' }
+  }
+
+  const parent = await fetchComment(ctx, target.parentId)
+  if (!parent) {
+    return { approved: false, message: 'Select a direct reply to a trade comment' }
+  }
+  if (!parent.isRoot) {
+    return { approved: false, message: 'Select a direct reply to a trade comment' }
+  }
+  if (!parent.authorName || parent.removed) {
+    return { approved: false, message: 'Parent trade comment cannot be confirmed' }
+  }
+  if (parent.authorName.toLowerCase() === target.authorName.toLowerCase()) {
+    return { approved: false, message: 'A user cannot confirm their own trade' }
+  }
+
+  const submission = await redditApiCall(ctx, () => ctx.reddit.getPostById(target.postId as `t3_${string}`), `get post ${target.postId}`)
+  const botUser = await redditApiCall(ctx, () => ctx.reddit.getAppUser(), 'get app user')
+  if (!botUser || submission.authorId !== botUser.id) {
+    return { approved: false, message: 'Selected comment is not on a bot confirmation thread' }
+  }
+  if (submission.locked) {
+    return { approved: false, message: 'Selected confirmation thread is locked' }
+  }
+  if (submission.id !== (await ctx.redis.get('currentMonthlyPost'))) {
+    return { approved: false, message: 'Selected comment is not on the current monthly confirmation thread' }
+  }
+
+  const result: ValidationResult = {
+    valid: true,
+    isModApproval: true,
+    parentAuthor: parent.authorName,
+    confirmer: target.authorName,
+    parentCommentId: parent.id,
+    replyToCommentId: target.id,
+  }
+  const completion = await completeConfirmation(ctx, subredditName, {
+    id: target.id,
+    body: target.body,
+    author: target.authorName,
+    authorFlair: target.authorFlair,
+    parentId: target.parentId,
+    postId: target.postId,
+    permalink: target.permalink,
+  }, result, manualApprovalFlairHints(parent, target))
+
+  if (!completion.approved) {
+    return {
+      approved: false,
+      message: 'That trade comment has already been confirmed',
+      parentAuthor: result.parentAuthor,
+      confirmer: result.confirmer,
+      parentCommentId: result.parentCommentId,
+    }
+  }
+
+  return {
+    approved: true,
+    message: `Approved confirmation for u/${result.parentAuthor} and u/${result.confirmer}`,
+    parentAuthor: result.parentAuthor,
+    confirmer: result.confirmer,
+    parentCommentId: result.parentCommentId,
+  }
 }
 
 export async function rescanCurrentMonthlyPost(ctx: TriggerContext): Promise<{ scanned: number; processed: number }> {
@@ -229,23 +313,26 @@ export async function rescanCurrentMonthlyPost(ctx: TriggerContext): Promise<{ s
   return { scanned: comments.length, processed }
 }
 
-async function fetchParent(ctx: TriggerContext, fullName: string) {
+async function fetchComment(ctx: TriggerContext, fullName: string): Promise<FetchedComment | null> {
   if (!fullName.startsWith('t1_')) return null
   const c = await redditApiCall(ctx, () => ctx.reddit.getCommentById(fullName as `t1_${string}`), `get comment ${fullName}`)
   return {
     id: c.id,
     parentId: c.parentId,
+    postId: c.postId,
+    subredditName: c.subredditName,
     authorName: c.authorName,
     authorFlair: c.authorFlair?.text ?? null,
     removed: c.removed ?? false,
     isRoot: c.parentId.startsWith('t3_'),
     body: c.body ?? '',
+    permalink: c.permalink,
   }
 }
 
 function shouldFetchGrandparent(
   comment: ProcessableComment,
-  parent: Awaited<ReturnType<typeof fetchParent>>,
+  parent: FetchedComment | null,
 ): parent is NonNullable<typeof parent> {
   return !!parent && !parent.isRoot && comment.body.toLowerCase().includes('approved')
 }
@@ -306,8 +393,8 @@ async function buildConfirmationParticipant(
 function oldFlairHints(
   comment: ProcessableComment,
   result: ValidationResult,
-  parent: Awaited<ReturnType<typeof fetchParent>>,
-  grandparent: Awaited<ReturnType<typeof fetchParent>>,
+  parent: FetchedComment | null,
+  grandparent: FetchedComment | null,
 ): Map<string, string | null> {
   const hints = new Map<string, string | null>()
   if (result.parentAuthor) {
@@ -323,6 +410,69 @@ function oldFlairHints(
     )
   }
   return hints
+}
+
+function manualApprovalFlairHints(parent: FetchedComment, target: FetchedComment): Map<string, string | null> {
+  return new Map([
+    [parent.authorName.toLowerCase(), parent.authorFlair],
+    [target.authorName.toLowerCase(), target.authorFlair],
+  ])
+}
+
+async function completeConfirmation(
+  ctx: TriggerContext,
+  subredditName: string,
+  comment: ProcessableComment,
+  result: ValidationResult,
+  oldFlairByUsername: Map<string, string | null>,
+): Promise<ManualApprovalResult> {
+  const flairTemplates = await loadFlairTemplates(ctx, subredditName)
+  const participants = await loadConfirmationParticipants(
+    ctx,
+    subredditName,
+    result.parentAuthor!,
+    result.confirmer!,
+    oldFlairByUsername,
+  )
+  const commit = await commitConfirmation(ctx, comment, result, participants.parent, participants.confirmer)
+  if (!commit.committed) {
+    return {
+      approved: false,
+      message: 'That trade comment has already been confirmed',
+      parentAuthor: result.parentAuthor,
+      confirmer: result.confirmer,
+      parentCommentId: result.parentCommentId,
+    }
+  }
+  console.debug(`Committed confirmation ${result.parentCommentId} from comment ${comment.id}`)
+
+  const parentResult = await applyCommittedFlair(ctx, subredditName, commit.parent, flairTemplates)
+  const confirmerResult = await applyCommittedFlair(ctx, subredditName, commit.confirmer, flairTemplates)
+
+  const replyTo = result.replyToCommentId ?? comment.id
+  const replyBody = render(await getTemplate(ctx, 'trade_confirmation'), {
+    comment_id: replyTo,
+    confirmer: result.confirmer ?? '',
+    parent_author: result.parentAuthor ?? '',
+    old_comment_flair: confirmerResult.oldFlair ?? 'unknown',
+    new_comment_flair: confirmerResult.newFlair ?? 'unknown',
+    old_parent_flair: parentResult.oldFlair ?? 'unknown',
+    new_parent_flair: parentResult.newFlair ?? 'unknown',
+  })
+  await trySubmitCommentWithRetry(ctx, replyTo, replyBody)
+  console.debug(
+    `Confirmed ${result.parentCommentId}: u/${result.parentAuthor} ${parentResult.oldFlair ?? 'none'} -> ` +
+    `${parentResult.newFlair ?? 'unchanged'}, u/${result.confirmer} ${confirmerResult.oldFlair ?? 'none'} -> ` +
+    `${confirmerResult.newFlair ?? 'unchanged'}`,
+  )
+
+  return {
+    approved: true,
+    message: `Approved confirmation for u/${result.parentAuthor} and u/${result.confirmer}`,
+    parentAuthor: result.parentAuthor,
+    confirmer: result.confirmer,
+    parentCommentId: result.parentCommentId,
+  }
 }
 
 async function commitConfirmation(

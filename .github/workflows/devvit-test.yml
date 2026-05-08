@@ -5,6 +5,8 @@ on:
   pull_request:
     paths:
       - ".github/workflows/devvit-test.yml"
+      - "assets/**"
+      - "devvit.json"
       - "README.md"
       - "package-lock.json"
       - "package.json"
@@ -16,6 +18,8 @@ on:
   push:
     paths:
       - ".github/workflows/devvit-test.yml"
+      - "assets/**"
+      - "devvit.json"
       - "README.md"
       - "package-lock.json"
       - "package.json"

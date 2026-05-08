@@ -1,5 +1,5 @@
 export { adjustUserTradeCount } from './adjustments.js'
-export { onCommentSubmit, rescanCurrentMonthlyPost } from './confirmations.js'
+export { approveConfirmationFromComment, onCommentSubmit, rescanCurrentMonthlyPost } from './confirmations.js'
 export { refreshFlairTemplateCache } from './flairCache.js'
 export { importExistingFlairCounts } from './migration.js'
 export { onMonthlyPost } from './monthly.js'
