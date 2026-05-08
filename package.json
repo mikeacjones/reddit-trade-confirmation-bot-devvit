@@ -1,6 +1,6 @@
 {
-  "name": "swap-conf-bot",
-  "version": "0.0.8",
+  "name": "swap-bot",
+  "version": "0.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -18,5 +18,5 @@
     "typescript": "^5.4.0",
     "vitest": "^1.6.0"
   },
-  "license": "MIT"
+  "license": "BSD-3-Clause"
 }
