@@ -4,22 +4,29 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
+      - ".github/workflows/devvit-test.yml"
       - "README.md"
       - "package-lock.json"
       - "package.json"
+      - "scripts/**"
       - "src/**"
       - "tests/**"
       - "tsconfig.json"
       - "vitest.config.ts"
   push:
     paths:
+      - ".github/workflows/devvit-test.yml"
       - "README.md"
       - "package-lock.json"
       - "package.json"
+      - "scripts/**"
       - "src/**"
       - "tests/**"
       - "tsconfig.json"
       - "vitest.config.ts"
+
+permissions:
+  contents: write
 
 concurrency:
   group: devvit-test
@@ -39,3 +46,17 @@ jobs:
 
       - run: npm ci
       - run: npm run test:coverage
+      - run: npm run coverage:badge
+
+      - name: Commit coverage badge
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          if git diff --quiet -- .github/badges/coverage.json; then
+            echo "Coverage badge is already current"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/badges/coverage.json
+          git commit -m "Update coverage badge [skip ci]"
+          git push

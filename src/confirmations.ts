@@ -4,17 +4,16 @@ import {
   evaluateConfirmation,
   findFlairTemplate,
   formatFlairFromTemplate,
-  parseTradeCount,
   type FlairTemplate,
   type ValidationResult,
 } from './rules.js'
 import { defaults } from './defaults/index.js'
 import { render } from './templates.js'
+import { trySetUserFlairWithFallback } from './flairAssignment.js'
 import { loadFlairTemplates, refreshFlairTemplateCache } from './flairCache.js'
 import { isUserModerator } from './moderators.js'
 import {
   redditApiCall,
-  tryRedditWriteWithRetry,
   trySubmitCommentWithRetry,
 } from './redditApi.js'
 import { errorText, expirationFromNow } from './utils.js'
@@ -28,6 +27,7 @@ interface ProcessableComment {
   id: string
   body: string
   author: string
+  authorFlair: string | null
   parentId: string
   postId: string
   permalink: string
@@ -38,7 +38,6 @@ interface ConfirmationParticipant {
   usernameLower: string
   countKey: string
   oldFlair: string | null
-  seedCount: number
   isModerator: boolean
 }
 
@@ -73,6 +72,7 @@ export async function onCommentSubmit(event: CommentSubmit, ctx: TriggerContext)
     id: c.id,
     body: c.body,
     author: event.author?.name ?? '',
+    authorFlair: event.author?.flair?.text || null,
     parentId: c.parentId,
     postId: c.postId,
     permalink: c.permalink,
@@ -174,6 +174,7 @@ async function processCommentOnce(
     subredditName,
     result.parentAuthor!,
     result.confirmer!,
+    oldFlairHints(comment, result, parent, grandparent),
   )
   const commit = await commitConfirmation(ctx, comment, result, participants.parent, participants.confirmer)
   if (!commit.committed) {
@@ -218,6 +219,7 @@ export async function rescanCurrentMonthlyPost(ctx: TriggerContext): Promise<{ s
       id: c.id,
       body: c.body,
       author: c.authorName,
+      authorFlair: c.authorFlair?.text ?? null,
       parentId: c.parentId,
       postId: c.postId,
       permalink: c.permalink,
@@ -234,6 +236,7 @@ async function fetchParent(ctx: TriggerContext, fullName: string) {
     id: c.id,
     parentId: c.parentId,
     authorName: c.authorName,
+    authorFlair: c.authorFlair?.text ?? null,
     removed: c.removed ?? false,
     isRoot: c.parentId.startsWith('t3_'),
     body: c.body ?? '',
@@ -273,20 +276,12 @@ async function loadConfirmationParticipants(
   subredditName: string,
   parentUsername: string,
   confirmerUsername: string,
+  oldFlairByUsername: Map<string, string | null>,
 ): Promise<{ parent: ConfirmationParticipant; confirmer: ConfirmationParticipant }> {
-  const sub = await redditApiCall(ctx, () => ctx.reddit.getSubredditByName(subredditName), `get subreddit ${subredditName}`)
-  const usernames = uniqueUsernames([parentUsername, confirmerUsername])
-  const userFlair = await redditApiCall(ctx, () => sub.getUserFlair({ usernames }), `get flair for confirmation users`)
-  const flairByUsername = new Map(
-    userFlair.users
-      .filter(user => user.user)
-      .map(user => [user.user!.toLowerCase(), user.flairText ?? null]),
-  )
-
-  const parent = await buildConfirmationParticipant(ctx, subredditName, parentUsername, flairByUsername)
+  const parent = await buildConfirmationParticipant(ctx, subredditName, parentUsername, oldFlairByUsername)
   const confirmer = parent.usernameLower === confirmerUsername.toLowerCase()
     ? parent
-    : await buildConfirmationParticipant(ctx, subredditName, confirmerUsername, flairByUsername)
+    : await buildConfirmationParticipant(ctx, subredditName, confirmerUsername, oldFlairByUsername)
   return { parent, confirmer }
 }
 
@@ -294,19 +289,40 @@ async function buildConfirmationParticipant(
   ctx: TriggerContext,
   subredditName: string,
   username: string,
-  flairByUsername: Map<string, string | null>,
+  oldFlairByUsername: Map<string, string | null>,
 ): Promise<ConfirmationParticipant> {
   const usernameLower = username.toLowerCase()
-  const oldFlair = flairByUsername.get(usernameLower) ?? null
+  const oldFlair = oldFlairByUsername.get(usernameLower) ?? null
   const isMod = await isUserModerator(ctx, subredditName, username)
   return {
     username,
     usernameLower,
     countKey: `confirmations:${usernameLower}`,
     oldFlair,
-    seedCount: parseTradeCount(oldFlair) ?? 0,
     isModerator: isMod,
   }
+}
+
+function oldFlairHints(
+  comment: ProcessableComment,
+  result: ValidationResult,
+  parent: Awaited<ReturnType<typeof fetchParent>>,
+  grandparent: Awaited<ReturnType<typeof fetchParent>>,
+): Map<string, string | null> {
+  const hints = new Map<string, string | null>()
+  if (result.parentAuthor) {
+    hints.set(
+      result.parentAuthor.toLowerCase(),
+      result.isModApproval ? grandparent?.authorFlair ?? null : parent?.authorFlair ?? null,
+    )
+  }
+  if (result.confirmer) {
+    hints.set(
+      result.confirmer.toLowerCase(),
+      result.isModApproval ? parent?.authorFlair ?? null : comment.authorFlair,
+    )
+  }
+  return hints
 }
 
 async function commitConfirmation(
@@ -335,7 +351,7 @@ async function commitConfirmation(
       const stored = parseStoredCount(await ctx.redis.get(participant.countKey))
       committed.set(participant.usernameLower, {
         ...participant,
-        newCount: (stored ?? participant.seedCount) + 1,
+        newCount: (stored ?? 0) + 1,
         newFlair: null,
       })
     }
@@ -409,14 +425,16 @@ async function applyCommittedFlair(
   if (!tpl) return { ...participant, newFlair: null }
 
   const newFlair = formatFlairFromTemplate(tpl.template, participant.newCount)
-  await tryRedditWriteWithRetry(ctx, () =>
-    ctx.reddit.setUserFlair({
+  await trySetUserFlairWithFallback(
+    ctx,
+    {
       subredditName,
       username: participant.username,
       text: newFlair,
       flairTemplateId: tpl.id,
-    }),
-  `set flair for u/${participant.username}`)
+    },
+    `set flair for u/${participant.username}`,
+  )
   return { ...participant, newFlair }
 }
 
