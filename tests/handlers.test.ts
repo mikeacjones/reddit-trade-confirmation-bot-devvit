@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { adjustUserTradeCount, onMonthlyPost } from '../src/handlers'
+import { adjustUserTradeCount, onCommentSubmit, onMonthlyPost } from '../src/handlers'
 
 function mockRedis(initial: Record<string, string> = {}) {
   const store = new Map(Object.entries(initial))
+  const transactions: Array<{ keys: string[]; commands: Array<{ command: string; key: string }> }> = []
   return {
     store,
+    transactions,
     api: {
       get: vi.fn(async (key: string) => store.get(key)),
       set: vi.fn(async (key: string, value: string, options?: { nx?: boolean }) => {
@@ -14,6 +16,30 @@ function mockRedis(initial: Record<string, string> = {}) {
       }),
       del: vi.fn(async (key: string) => {
         store.delete(key)
+      }),
+      watch: vi.fn(async (...keys: string[]) => {
+        const commands: Array<{ command: string; key: string; value?: string; options?: { nx?: boolean } }> = []
+        let tx: any
+        tx = {
+          multi: vi.fn(async () => undefined),
+          set: vi.fn(async (key: string, value: string, options?: { nx?: boolean }) => {
+            commands.push({ command: 'set', key, value, options })
+            return tx
+          }),
+          exec: vi.fn(async () => {
+            transactions.push({ keys, commands: commands.map(({ command, key }) => ({ command, key })) })
+            return commands.map(command => {
+              if (command.command === 'set') {
+                if (command.options?.nx && store.has(command.key)) return false
+                store.set(command.key, command.value ?? '')
+                return true
+              }
+              return true
+            })
+          }),
+          unwatch: vi.fn(async () => tx),
+        }
+        return tx
       }),
     },
   }
@@ -56,6 +82,66 @@ function mockMonthlyContext(initial: Record<string, string> = {}) {
     },
   }
   return { ctx: ctx as any, redis, previousPost, newPost, submitPost }
+}
+
+function mockConfirmationContext(initial: Record<string, string> = {}) {
+  const redis = mockRedis({
+    currentMonthlyPost: 't3_post',
+    'flairTemplates:plasticmodelexchange': JSON.stringify([
+      { min: 0, max: 99, id: 'tpl-user', template: 'Trades: 0-99', modOnly: false },
+    ]),
+    moderators: JSON.stringify({
+      usernames: [],
+      syncedAt: '2026-05-08T00:00:00.000Z',
+    }),
+    ...initial,
+  })
+  const setUserFlair = vi.fn(async () => undefined)
+  const submitComment = vi.fn(async () => undefined)
+  const sub = {
+    getUserFlair: vi.fn(async () => ({
+      users: [
+        { user: 'seller', flairText: 'Trades: 4' },
+        { user: 'buyer', flairText: 'Trades: 2' },
+      ],
+    })),
+  }
+  const ctx = {
+    redis: redis.api,
+    settings: {
+      get: vi.fn(async () => undefined),
+    },
+    reddit: {
+      getPostById: vi.fn(async () => ({
+        id: 't3_post',
+        authorId: 't2_bot',
+        locked: false,
+      })),
+      getAppUser: vi.fn(async () => ({ id: 't2_bot', username: 'swap-conf-bot' })),
+      getCommentById: vi.fn(async () => ({
+        id: 't1_parent',
+        parentId: 't3_post',
+        authorName: 'seller',
+        body: 'sold to u/buyer',
+        removed: false,
+      })),
+      getSubredditByName: vi.fn(async () => sub),
+      setUserFlair,
+      submitComment,
+    },
+  }
+  const event = {
+    comment: {
+      id: 't1_confirm',
+      body: 'confirmed',
+      parentId: 't1_parent',
+      postId: 't3_post',
+      permalink: 'https://reddit.test/r/PlasticModelExchange/comments/post/_/confirm',
+    },
+    author: { name: 'buyer' },
+    subreddit: { name: 'PlasticModelExchange' },
+  }
+  return { ctx: ctx as any, event: event as any, redis, setUserFlair, submitComment }
 }
 
 afterEach(() => {
@@ -170,5 +256,55 @@ describe('onMonthlyPost', () => {
     await onMonthlyPost(undefined as any, ctx)
 
     expect(submitPost).not.toHaveBeenCalled()
+  })
+})
+
+describe('onCommentSubmit', () => {
+  it('commits the parent claim and both counts in one Redis transaction', async () => {
+    const { ctx, event, redis, setUserFlair, submitComment } = mockConfirmationContext()
+
+    await onCommentSubmit(event, ctx)
+
+    const record = JSON.parse(redis.store.get('confirmed:t1_parent') ?? '{}')
+    expect(record).toEqual(expect.objectContaining({
+      commentId: 't1_confirm',
+      parentAuthor: 'seller',
+      confirmer: 'buyer',
+      parentCount: 5,
+      confirmerCount: 3,
+    }))
+    expect(redis.store.get('confirmations:seller')).toBe('5')
+    expect(redis.store.get('confirmations:buyer')).toBe('3')
+    expect(redis.transactions).toContainEqual({
+      keys: ['confirmed:t1_parent', 'confirmations:seller', 'confirmations:buyer'],
+      commands: [
+        { command: 'set', key: 'confirmed:t1_parent' },
+        { command: 'set', key: 'confirmations:seller' },
+        { command: 'set', key: 'confirmations:buyer' },
+      ],
+    })
+    expect(setUserFlair).toHaveBeenCalledTimes(2)
+    expect(submitComment).toHaveBeenCalledOnce()
+  })
+
+  it('does not change counts when the parent claim already exists', async () => {
+    const { ctx, event, redis, setUserFlair } = mockConfirmationContext({
+      'confirmed:t1_parent': JSON.stringify({
+        commentId: 't1_other',
+        parentAuthor: 'seller',
+        confirmer: 'buyer',
+        parentCount: 5,
+        confirmerCount: 3,
+        createdAt: '2026-05-08T00:00:00.000Z',
+      }),
+      'confirmations:seller': '5',
+      'confirmations:buyer': '3',
+    })
+
+    await onCommentSubmit(event, ctx)
+
+    expect(redis.store.get('confirmations:seller')).toBe('5')
+    expect(redis.store.get('confirmations:buyer')).toBe('3')
+    expect(setUserFlair).not.toHaveBeenCalled()
   })
 })

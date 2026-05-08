@@ -24,7 +24,6 @@ const MAX_RATE_LIMIT_SLEEP_MS = 20 * 1000
 const MONTHLY_POST_CLAIM_TTL_MS = 15 * 60 * 1000
 
 type RejectionReason = NonNullable<ValidationResult['reason']>
-type ConfirmationClaimResult = 'claimed' | 'owned' | 'already_claimed'
 type RedditApiContext = Pick<TriggerContext, 'reddit' | 'redis'>
 type FlairTemplateContext = RedditApiContext
 type ModeratorCacheContext = RedditApiContext
@@ -47,6 +46,39 @@ interface CachedFlairTemplate extends FlairTemplate {
 interface CachedModeratorList {
   usernames: string[]
   syncedAt: string
+}
+
+interface ConfirmationParticipant {
+  username: string
+  usernameLower: string
+  countKey: string
+  oldFlair: string | null
+  seedCount: number
+  isModerator: boolean
+}
+
+interface CommittedConfirmationParticipant extends ConfirmationParticipant {
+  newCount: number
+  newFlair: string | null
+}
+
+type ConfirmationCommit =
+  | {
+    committed: true
+    parent: CommittedConfirmationParticipant
+    confirmer: CommittedConfirmationParticipant
+  }
+  | { committed: false }
+
+interface ConfirmationClaimRecord {
+  commentId: string
+  replyToCommentId: string
+  confirmer: string
+  parentAuthor: string
+  modApproval: boolean
+  parentCount: number
+  confirmerCount: number
+  createdAt: string
 }
 
 interface PreviousMonthlyPost {
@@ -144,7 +176,6 @@ async function processCommentOnce(
 
   const parent = await fetchParent(ctx, comment.parentId)
   const grandparent = shouldFetchGrandparent(comment, parent) ? await fetchParent(ctx, parent.parentId) : null
-  const parentIsSaved = parent ? !!(await ctx.redis.get(`confirmed:${parent.id}`)) : false
 
   const result = evaluateConfirmation(
     {
@@ -160,7 +191,7 @@ async function processCommentOnce(
       parentAuthorName: parent?.authorName ?? '',
       parentId: parent?.id ?? '',
       parentIsRoot: parent?.isRoot ?? false,
-      parentIsSaved,
+      parentIsSaved: false,
       parentBody: parent?.body ?? '',
       isModerator,
       grandparentExists: !!grandparent,
@@ -178,29 +209,23 @@ async function processCommentOnce(
     return true
   }
 
-  const claim = await claimConfirmation(ctx, comment, result)
-  if (claim === 'already_claimed') {
+  const flairTemplates = await loadFlairTemplates(ctx, subredditName)
+  const participants = await loadConfirmationParticipants(
+    ctx,
+    subredditName,
+    result.parentAuthor!,
+    result.confirmer!,
+  )
+  const commit = await commitConfirmation(ctx, comment, result, participants.parent, participants.confirmer)
+  if (!commit.committed) {
     console.debug(`Rejecting ${comment.id}: parent comment ${result.parentCommentId} already claimed`)
     await replyWithReason(ctx, comment, 'already_confirmed', result)
     return true
   }
-  console.debug(`Claimed confirmation ${result.parentCommentId} from comment ${comment.id}`)
+  console.debug(`Committed confirmation ${result.parentCommentId} from comment ${comment.id}`)
 
-  const flairTemplates = await loadFlairTemplates(ctx, subredditName)
-  const parentResult = await seedAndIncrementFlair(
-    ctx,
-    subredditName,
-    result.parentAuthor!,
-    result.parentCommentId!,
-    flairTemplates,
-  )
-  const confirmerResult = await seedAndIncrementFlair(
-    ctx,
-    subredditName,
-    result.confirmer!,
-    result.parentCommentId!,
-    flairTemplates,
-  )
+  const parentResult = await applyCommittedFlair(ctx, subredditName, commit.parent, flairTemplates)
+  const confirmerResult = await applyCommittedFlair(ctx, subredditName, commit.confirmer, flairTemplates)
 
   const replyTo = result.replyToCommentId ?? comment.id
   const replyBody = render(await getTemplate(ctx, 'trade_confirmation'), {
@@ -363,38 +388,6 @@ async function getTemplate(ctx: TriggerContext, name: string): Promise<string> {
   return (await ctx.settings.get<string>(name))?.trim() || defaults[name]
 }
 
-async function claimConfirmation(
-  ctx: TriggerContext,
-  comment: ProcessableComment,
-  result: ValidationResult,
-): Promise<ConfirmationClaimResult> {
-  if (!result.parentCommentId) return 'already_claimed'
-  const key = `confirmed:${result.parentCommentId}`
-  const record = JSON.stringify({
-    commentId: comment.id,
-    replyToCommentId: result.replyToCommentId ?? comment.id,
-    confirmer: result.confirmer ?? '',
-    parentAuthor: result.parentAuthor ?? '',
-    modApproval: result.isModApproval ?? false,
-    createdAt: new Date().toISOString(),
-  })
-  const claimed = await ctx.redis.set(key, record, { nx: true })
-  if (claimed) return 'claimed'
-
-  const existing = await ctx.redis.get(key)
-  return claimedByComment(existing, comment.id) ? 'owned' : 'already_claimed'
-}
-
-function claimedByComment(record: string | undefined, commentId: string): boolean {
-  if (!record) return false
-  try {
-    const parsed = JSON.parse(record) as { commentId?: unknown }
-    return parsed.commentId === commentId
-  } catch {
-    return false
-  }
-}
-
 async function replyWithReason(
   ctx: TriggerContext,
   comment: ProcessableComment,
@@ -412,67 +405,181 @@ async function replyWithReason(
   await trySubmitCommentWithRetry(ctx, comment.id, replyBody)
 }
 
-async function seedAndIncrementFlair(
+async function loadConfirmationParticipants(
+  ctx: TriggerContext,
+  subredditName: string,
+  parentUsername: string,
+  confirmerUsername: string,
+): Promise<{ parent: ConfirmationParticipant; confirmer: ConfirmationParticipant }> {
+  const sub = await redditApiCall(ctx, () => ctx.reddit.getSubredditByName(subredditName), `get subreddit ${subredditName}`)
+  const usernames = uniqueUsernames([parentUsername, confirmerUsername])
+  const userFlair = await redditApiCall(ctx, () => sub.getUserFlair({ usernames }), `get flair for confirmation users`)
+  const flairByUsername = new Map(
+    userFlair.users
+      .filter(user => user.user)
+      .map(user => [user.user!.toLowerCase(), user.flairText ?? null]),
+  )
+
+  const parent = await buildConfirmationParticipant(ctx, subredditName, parentUsername, flairByUsername)
+  const confirmer = parent.usernameLower === confirmerUsername.toLowerCase()
+    ? parent
+    : await buildConfirmationParticipant(ctx, subredditName, confirmerUsername, flairByUsername)
+  return { parent, confirmer }
+}
+
+async function buildConfirmationParticipant(
   ctx: TriggerContext,
   subredditName: string,
   username: string,
-  confirmationId: string,
-  flairTemplates: Map<[number, number], FlairTemplate>,
-) {
-  const normalizedUsername = username.toLowerCase()
-  const key = `confirmations:${normalizedUsername}`
-  const incrementKey = `confirmed:${confirmationId}:incremented:${normalizedUsername}`
-  const sub = await redditApiCall(ctx, () => ctx.reddit.getSubredditByName(subredditName), `get subreddit ${subredditName}`)
-  const userFlair = await redditApiCall(ctx, () => sub.getUserFlair({ usernames: [username] }), `get flair for u/${username}`)
-  const oldFlair = userFlair.users[0]?.flairText ?? null
-
-  if ((await ctx.redis.get(key)) === undefined) {
-    await ctx.redis.set(key, String(parseTradeCount(oldFlair) ?? 0), { nx: true })
-  }
-
-  const newCount = await incrementConfirmationCountOnce(ctx, key, incrementKey)
+  flairByUsername: Map<string, string | null>,
+): Promise<ConfirmationParticipant> {
+  const usernameLower = username.toLowerCase()
+  const oldFlair = flairByUsername.get(usernameLower) ?? null
   const isMod = await isUserModerator(ctx, subredditName, username)
-  const tpl = findFlairTemplate(flairTemplates, newCount, isMod)
-    ?? findFlairTemplate(await refreshFlairTemplateCache(ctx, subredditName), newCount, isMod)
-  if (!tpl) return { oldFlair, newFlair: null as string | null }
-
-  const newFlair = formatFlairFromTemplate(tpl.template, newCount)
-  await tryRedditWriteWithRetry(ctx, () =>
-    ctx.reddit.setUserFlair({ subredditName, username, text: newFlair, flairTemplateId: tpl.id }),
-    `set flair for u/${username}`,
-  )
-  return { oldFlair, newFlair }
+  return {
+    username,
+    usernameLower,
+    countKey: `confirmations:${usernameLower}`,
+    oldFlair,
+    seedCount: parseTradeCount(oldFlair) ?? 0,
+    isModerator: isMod,
+  }
 }
 
-async function incrementConfirmationCountOnce(
+async function commitConfirmation(
   ctx: TriggerContext,
-  countKey: string,
-  incrementKey: string,
-): Promise<number> {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (await ctx.redis.get(incrementKey)) {
-      console.debug(`Skipping duplicate increment for ${incrementKey}`)
-      return parseInt((await ctx.redis.get(countKey)) ?? '0', 10)
+  comment: ProcessableComment,
+  result: ValidationResult,
+  parent: ConfirmationParticipant,
+  confirmer: ConfirmationParticipant,
+): Promise<ConfirmationCommit> {
+  if (!result.parentCommentId) return { committed: false }
+  const claimKey = `confirmed:${result.parentCommentId}`
+  const participants = uniqueParticipants([parent, confirmer])
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const txn = await ctx.redis.watch(claimKey, ...participants.map(participant => participant.countKey))
+    const existing = await ctx.redis.get(claimKey)
+    if (existing) {
+      await txn.unwatch()
+      const replay = replayCommittedConfirmation(existing, comment.id, parent, confirmer)
+      if (replay) return replay
+      return { committed: false }
     }
 
-    const txn = await ctx.redis.watch(incrementKey)
-    if (await ctx.redis.get(incrementKey)) {
-      await txn.unwatch()
-      console.debug(`Skipping duplicate increment for ${incrementKey} after watch`)
-      return parseInt((await ctx.redis.get(countKey)) ?? '0', 10)
+    const committed = new Map<string, CommittedConfirmationParticipant>()
+    for (const participant of participants) {
+      const stored = parseStoredCount(await ctx.redis.get(participant.countKey))
+      committed.set(participant.usernameLower, {
+        ...participant,
+        newCount: (stored ?? participant.seedCount) + 1,
+        newFlair: null,
+      })
+    }
+
+    const parentCommit = committed.get(parent.usernameLower)!
+    const confirmerCommit = committed.get(confirmer.usernameLower)!
+    const record: ConfirmationClaimRecord = {
+      commentId: comment.id,
+      replyToCommentId: result.replyToCommentId ?? comment.id,
+      confirmer: result.confirmer ?? '',
+      parentAuthor: result.parentAuthor ?? '',
+      modApproval: result.isModApproval ?? false,
+      parentCount: parentCommit.newCount,
+      confirmerCount: confirmerCommit.newCount,
+      createdAt: new Date().toISOString(),
     }
 
     await txn.multi()
-    await txn.incrBy(countKey, 1)
-    await txn.set(incrementKey, '1')
-    const [newCount] = await txn.exec()
-    if (typeof newCount === 'number') {
-      console.debug(`Incremented ${countKey} to ${newCount} for ${incrementKey}`)
-      return newCount
+    await txn.set(claimKey, JSON.stringify(record), { nx: true })
+    for (const participant of participants) {
+      const next = committed.get(participant.usernameLower)!
+      await txn.set(participant.countKey, String(next.newCount))
     }
+    const results = await txn.exec()
+    if (results.length >= participants.length + 1 && results[0] !== false && results[0] !== null) {
+      console.debug(
+        `Atomically committed ${claimKey}: ` +
+        participants.map(participant => `${participant.usernameLower}=${committed.get(participant.usernameLower)!.newCount}`).join(', '),
+      )
+      return {
+        committed: true,
+        parent: parentCommit,
+        confirmer: confirmerCommit,
+      }
+    }
+
+    console.debug(`Retrying atomic confirmation commit for ${claimKey}`)
   }
 
-  throw new Error(`Failed to increment ${countKey} without racing`)
+  throw new Error(`Failed to atomically commit confirmation ${claimKey}`)
+}
+
+function replayCommittedConfirmation(
+  value: string,
+  commentId: string,
+  parent: ConfirmationParticipant,
+  confirmer: ConfirmationParticipant,
+): ConfirmationCommit | null {
+  try {
+    const record = JSON.parse(value) as Partial<ConfirmationClaimRecord>
+    if (record.commentId !== commentId) return null
+    if (typeof record.parentCount !== 'number' || typeof record.confirmerCount !== 'number') return null
+    return {
+      committed: true,
+      parent: { ...parent, newCount: record.parentCount, newFlair: null },
+      confirmer: { ...confirmer, newCount: record.confirmerCount, newFlair: null },
+    }
+  } catch {
+    return null
+  }
+}
+
+async function applyCommittedFlair(
+  ctx: TriggerContext,
+  subredditName: string,
+  participant: CommittedConfirmationParticipant,
+  flairTemplates: Map<[number, number], FlairTemplate>,
+): Promise<CommittedConfirmationParticipant> {
+  const tpl = findFlairTemplate(flairTemplates, participant.newCount, participant.isModerator)
+    ?? findFlairTemplate(await refreshFlairTemplateCache(ctx, subredditName), participant.newCount, participant.isModerator)
+  if (!tpl) return { ...participant, newFlair: null }
+
+  const newFlair = formatFlairFromTemplate(tpl.template, participant.newCount)
+  await tryRedditWriteWithRetry(ctx, () =>
+    ctx.reddit.setUserFlair({
+      subredditName,
+      username: participant.username,
+      text: newFlair,
+      flairTemplateId: tpl.id,
+    }),
+  `set flair for u/${participant.username}`)
+  return { ...participant, newFlair }
+}
+
+function uniqueUsernames(usernames: string[]): string[] {
+  const seen = new Set<string>()
+  return usernames.filter(username => {
+    const key = username.toLowerCase()
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+function uniqueParticipants(participants: ConfirmationParticipant[]): ConfirmationParticipant[] {
+  const seen = new Set<string>()
+  return participants.filter(participant => {
+    if (seen.has(participant.usernameLower)) return false
+    seen.add(participant.usernameLower)
+    return true
+  })
+}
+
+function parseStoredCount(value: string | undefined): number | null {
+  if (value === undefined) return null
+  const parsed = parseInt(value, 10)
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 async function trySubmitCommentWithRetry(ctx: TriggerContext, id: string, text: string): Promise<boolean> {
