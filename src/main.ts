@@ -1,5 +1,14 @@
 import { Devvit } from '@devvit/public-api'
-import { onCommentSubmit, onMonthlyPost, onLockSubmissions, rescanCurrentMonthlyPost } from './handlers.js'
+import {
+  adjustUserTradeCount,
+  onCommentSubmit,
+  onMonthlyPost,
+  onModAction,
+  redditApiCall,
+  refreshFlairTemplateCache,
+  refreshModeratorCache,
+  rescanCurrentMonthlyPost,
+} from './handlers.js'
 import { defaults } from './defaults/index.js'
 
 Devvit.configure({ redditAPI: true, redis: true })
@@ -14,16 +23,59 @@ Devvit.addSettings([
   { name: 'monthly_post_flair_id', type: 'string', label: 'Optional submission flair ID', defaultValue: '' },
 ])
 
+const adjustTradeCountForm = Devvit.createForm({
+  title: 'Set user trade count',
+  acceptLabel: 'Set count',
+  fields: [
+    {
+      type: 'string',
+      name: 'username',
+      label: 'Username',
+      helpText: 'Enter the Reddit username with or without u/.',
+      required: true,
+    },
+    {
+      type: 'number',
+      name: 'count',
+      label: 'Trade count',
+      helpText: 'Must be zero or greater.',
+      required: true,
+      defaultValue: 0,
+    },
+  ],
+}, async (event, ctx) => {
+  try {
+    const result = await adjustUserTradeCount(
+      ctx,
+      String(event.values.username ?? ''),
+      Number(event.values.count),
+    )
+    ctx.ui.showToast(`Set u/${result.username} to ${result.count} trades`)
+  } catch (error) {
+    console.warn(`Failed to adjust trade count: ${error instanceof Error ? error.message : String(error)}`)
+    ctx.ui.showToast(error instanceof Error ? error.message : 'Failed to adjust trade count')
+  }
+})
+
 Devvit.addTrigger({ event: 'CommentSubmit', onEvent: onCommentSubmit })
+Devvit.addTrigger({ event: 'ModAction', onEvent: onModAction })
 
 Devvit.addSchedulerJob({ name: 'monthly-post', onRun: onMonthlyPost })
-Devvit.addSchedulerJob({ name: 'lock-submissions', onRun: onLockSubmissions })
 
 Devvit.addTrigger({
   event: 'AppInstall',
   onEvent: async (_e, ctx) => {
     await ctx.scheduler.runJob({ name: 'monthly-post', cron: '0 0 1 * *' })
-    await ctx.scheduler.runJob({ name: 'lock-submissions', cron: '0 0 5 * *' })
+    const { name } = await redditApiCall(ctx, () => ctx.reddit.getCurrentSubreddit(), 'get current subreddit')
+    await refreshModeratorCache(ctx, name)
+  },
+})
+
+Devvit.addTrigger({
+  event: 'AppUpgrade',
+  onEvent: async (_e, ctx) => {
+    const { name } = await redditApiCall(ctx, () => ctx.reddit.getCurrentSubreddit(), 'get current subreddit')
+    await refreshModeratorCache(ctx, name)
   },
 })
 
@@ -35,19 +87,21 @@ Devvit.addMenuItem({
 })
 
 Devvit.addMenuItem({
-  label: 'Lock old threads now',
-  location: 'subreddit',
-  forUserType: 'moderator',
-  onPress: async (_e, ctx) => { await ctx.scheduler.runJob({ name: 'lock-submissions', runAt: new Date() }) },
-})
-
-Devvit.addMenuItem({
   label: 'Re-scan monthly post comments',
   location: 'subreddit',
   forUserType: 'moderator',
   onPress: async (_e, ctx) => {
     const { scanned, processed } = await rescanCurrentMonthlyPost(ctx)
     ctx.ui.showToast(`Re-scan: ${scanned} comments, ${processed} newly processed`)
+  },
+})
+
+Devvit.addMenuItem({
+  label: 'Set user trade count',
+  location: 'subreddit',
+  forUserType: 'moderator',
+  onPress: async (_e, ctx) => {
+    ctx.ui.showForm(adjustTradeCountForm)
   },
 })
 
@@ -71,27 +125,50 @@ Devvit.addMenuItem({
       ctx.ui.showToast('Flairs already set up')
       return
     }
-    const { name } = await ctx.reddit.getCurrentSubreddit()
+    const { name } = await redditApiCall(ctx, () => ctx.reddit.getCurrentSubreddit(), 'get current subreddit')
     for (let i = 0; i < 10; i++) {
       const min = i * 100
       const max = i === 9 ? 99999 : min + 99
       const bg = randomHex()
-      await ctx.reddit.createUserFlairTemplate({
+      await redditApiCall(ctx, () => ctx.reddit.createUserFlairTemplate({
         subredditName: name,
         text: `Trades: ${min}-${max}`,
         backgroundColor: bg,
         textColor: pickTextColor(bg),
-      })
+      }), `create flair template Trades: ${min}-${max}`)
     }
-    await ctx.reddit.createUserFlairTemplate({
+    await redditApiCall(ctx, () => ctx.reddit.createUserFlairTemplate({
       subredditName: name,
       text: 'Moderator | Trades: 0-99999',
       backgroundColor: '#46d160',
       textColor: 'dark',
       modOnly: true,
-    })
+    }), 'create moderator flair template')
+    await refreshFlairTemplateCache(ctx, name)
     await ctx.redis.set('flairs_seeded', '1')
     ctx.ui.showToast('Created 11 user flair templates')
+  },
+})
+
+Devvit.addMenuItem({
+  label: 'Refresh flair template cache',
+  location: 'subreddit',
+  forUserType: 'moderator',
+  onPress: async (_e, ctx) => {
+    const { name } = await redditApiCall(ctx, () => ctx.reddit.getCurrentSubreddit(), 'get current subreddit')
+    await refreshFlairTemplateCache(ctx, name)
+    ctx.ui.showToast('Flair template cache refreshed')
+  },
+})
+
+Devvit.addMenuItem({
+  label: 'Refresh moderator cache',
+  location: 'subreddit',
+  forUserType: 'moderator',
+  onPress: async (_e, ctx) => {
+    const { name } = await redditApiCall(ctx, () => ctx.reddit.getCurrentSubreddit(), 'get current subreddit')
+    const moderators = await refreshModeratorCache(ctx, name)
+    ctx.ui.showToast(`Moderator cache refreshed (${moderators.size} mods)`)
   },
 })
 

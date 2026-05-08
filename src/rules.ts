@@ -78,11 +78,10 @@ export interface ValidationResult {
 
 export function evaluateConfirmation(comment: CommentInput, ctx: ConfirmationContext): ValidationResult {
   if (comment.isRoot) {
-    return ctx.isCurrentSubmission
-      ? { valid: false }
-      : { valid: false, reason: 'old_confirmation_thread' }
+    return { valid: false }
   }
 
+  if (!ctx.isCurrentSubmission) return { valid: false, reason: 'old_confirmation_thread' }
   if (!ctx.parentExists || ctx.parentIsBanned) return { valid: false }
   if (!ctx.parentIsProcessable) return { valid: false }
   if (ctx.parentAuthorName === comment.authorName) return { valid: false }

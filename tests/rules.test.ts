@@ -135,9 +135,18 @@ describe('evaluateConfirmation', () => {
     expect(r.reason).toBeUndefined()
   })
 
-  it('rejects root comments on old thread with old_confirmation_thread reason', () => {
+  it('rejects root comments on old thread without reason', () => {
     const r = evaluateConfirmation(
       { ...baseComment, isRoot: true },
+      { ...baseContext, isCurrentSubmission: false },
+    )
+    expect(r.valid).toBe(false)
+    expect(r.reason).toBeUndefined()
+  })
+
+  it('rejects replies on old thread with old_confirmation_thread reason', () => {
+    const r = evaluateConfirmation(
+      baseComment,
       { ...baseContext, isCurrentSubmission: false },
     )
     expect(r.valid).toBe(false)
