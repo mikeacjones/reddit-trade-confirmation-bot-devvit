@@ -1,0 +1,39 @@
+name: devvit-publish
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "README.md"
+      - "package-lock.json"
+      - "package.json"
+      - "src/**"
+      - "tests/**"
+      - "tsconfig.json"
+      - "vitest.config.ts"
+
+concurrency:
+  group: devvit-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - run: npm ci
+      - run: npm test
+
+      - name: Publish to Devvit
+        env:
+          DEVVIT_AUTH_TOKEN: ${{ secrets.DEVVIT_AUTH_TOKEN }}
+          DEVVIT_ALLOW_SOURCE_UPLOAD: "1"
+        run: npx devvit publish --public
