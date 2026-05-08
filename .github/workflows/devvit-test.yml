@@ -1,0 +1,41 @@
+name: devvit-test
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "README.md"
+      - "package-lock.json"
+      - "package.json"
+      - "src/**"
+      - "tests/**"
+      - "tsconfig.json"
+      - "vitest.config.ts"
+  push:
+    paths:
+      - "README.md"
+      - "package-lock.json"
+      - "package.json"
+      - "src/**"
+      - "tests/**"
+      - "tsconfig.json"
+      - "vitest.config.ts"
+
+concurrency:
+  group: devvit-test
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - run: npm ci
+      - run: npm test
