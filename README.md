@@ -1,7 +1,7 @@
 # Trade Confirmation Bot
 
 [![Unit tests](https://github.com/mikeacjones/reddit-trade-confirmation-bot-devvit/actions/workflows/devvit-test.yml/badge.svg)](https://github.com/mikeacjones/reddit-trade-confirmation-bot-devvit/actions/workflows/devvit-test.yml)
-![Coverage](https://img.shields.io/badge/coverage-84.01%25-brightgreen)
+![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmikeacjones%2Freddit-trade-confirmation-bot-devvit%2Fmain%2F.github%2Fbadges%2Fcoverage.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A Reddit Devvit app that tracks completed trades for swap subreddits. When two users confirm a trade in the monthly thread, the bot replies and bumps each user's trade count via flair.
@@ -37,6 +37,8 @@ You can then edit the templates' colors, emoji, and surrounding text in Reddit's
 If you edit templates manually, use **Refresh flair template cache** from the subreddit menu to make the bot pick up the change immediately. Otherwise, template changes may take several hours to appear.
 
 If you recently changed the moderator list and need moderator-only flair behavior to update immediately, use **Refresh moderator cache** from the subreddit menu.
+
+If the subreddit already has trade-count flair before installing the bot, use **Import existing flair counts** once after install. It scans user flairs that contain `Trades: N` and imports those counts. Counts already stored by the bot are kept.
 
 **Custom flair text** — the marker can sit anywhere in the template, so all of these work:
 
@@ -118,6 +120,7 @@ All accessible from the subreddit's three-dot menu. Mods only.
 | **Trigger monthly post now** | Runs the monthly-post job immediately (creates a new post, or re-stickies an existing one for this month, then locks the previous monthly thread). |
 | **Re-scan monthly post comments** | Walks all comments in the current monthly post and processes any confirmations the bot missed. |
 | **Set user trade count** | Opens a form to set one user's trade count and apply the matching Reddit user flair. |
+| **Import existing flair counts** | Scans current user flairs and imports parseable `Trades: N` counts. Counts already stored by the bot are kept. |
 | **Set up default user flairs** | One-time creation of the ten default `Trades: N-M` flair templates (see step 1). |
 | **Refresh flair template cache** | Makes the bot pick up manual flair-template edits immediately. |
 | **Refresh moderator cache** | Makes the bot pick up moderator-list changes immediately. |

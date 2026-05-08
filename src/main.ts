@@ -1,6 +1,7 @@
 import { Devvit } from '@devvit/public-api'
 import {
   adjustUserTradeCount,
+  importExistingFlairCounts,
   onCommentSubmit,
   onMonthlyPost,
   onModAction,
@@ -102,6 +103,22 @@ Devvit.addMenuItem({
   forUserType: 'moderator',
   onPress: async (_e, ctx) => {
     ctx.ui.showForm(adjustTradeCountForm)
+  },
+})
+
+Devvit.addMenuItem({
+  label: 'Import existing flair counts',
+  location: 'subreddit',
+  forUserType: 'moderator',
+  onPress: async (_e, ctx) => {
+    const result = await importExistingFlairCounts(ctx)
+    if (result.alreadyRunning) {
+      ctx.ui.showToast('Flair count import is already running')
+      return
+    }
+    ctx.ui.showToast(
+      `Imported ${result.imported}; kept ${result.skippedExisting} existing Redis counts; skipped ${result.skippedUnparseable}`,
+    )
   },
 })
 

@@ -12,8 +12,25 @@ interface PreviousMonthlyPost {
   permalink: string
   stickied: boolean
   locked?: boolean
+  removed?: boolean
+  spam?: boolean
+  archived?: boolean
+  removedByCategory?: string
   unsticky: () => Promise<unknown>
   lock: () => Promise<unknown>
+}
+
+interface MonthlyPostCandidate extends PreviousMonthlyPost {
+  subredditName: string
+  createdAt: Date
+  sticky: () => Promise<unknown>
+}
+
+interface CreatedMonthlyPost {
+  id: string
+  permalink: string
+  setSuggestedCommentSort: (sort: 'NEW') => Promise<unknown>
+  sticky: () => Promise<unknown>
 }
 
 export async function onMonthlyPost(_event: ScheduledJobEvent<undefined>, ctx: JobContext): Promise<void> {
@@ -57,33 +74,25 @@ async function createOrRefreshMonthlyPost(
   }
 
   const botUser = await redditApiCall(ctx, () => ctx.reddit.getAppUser(), 'get app user')
-  const existing = botUser ? await findExistingPostForMonth(ctx, subredditName, now, botUser.username) : null
-  if (existing) {
-    await lockPreviousMonthlyPost(ctx, previousPost, existing.id)
-    if (!existing.stickied) await redditApiCall(ctx, () => existing.sticky(), `sticky existing monthly post ${existing.id}`)
-    await ctx.redis.set('currentMonthlyPost', existing.id)
-    console.debug(`Monthly post already exists for r/${subredditName}: ${existing.id}`)
-    return
-  }
-
   const titleTemplate = (await ctx.settings.get<string>('monthly_post_title')) || defaults.monthly_post_title
   const bodyTemplate = (await ctx.settings.get<string>('monthly_post')) || defaults.monthly_post
   const flairId = (await ctx.settings.get<string>('monthly_post_flair_id'))?.trim() || undefined
+  const title = renderTitle(titleTemplate, now)
 
-  const post = await redditApiCall(ctx, () => ctx.reddit.submitPost({
+  const existing = botUser ? await findExistingPostForMonth(ctx, subredditName, now, botUser.username, title) : null
+  if (existing) {
+    await lockPreviousMonthlyPost(ctx, previousPost, existing.id)
+    if (await tryReuseExistingMonthlyPost(ctx, subredditName, existing)) return
+  }
+
+  const post = await submitMonthlyPost(ctx, {
     subredditName,
-    title: renderTitle(titleTemplate, now),
-    text: render(bodyTemplate, {
-      bot_name: botUser?.username ?? '',
-      subreddit_name: subredditName,
-      previous_month_submission: previous ?? {
-        title: 'Previous monthly thread',
-        permalink: `https://www.reddit.com/r/${subredditName}/`,
-      },
-    }),
-    sendreplies: false,
+    title,
+    bodyTemplate,
+    botName: botUser?.username ?? '',
+    previous,
     flairId,
-  }), `submit monthly post to r/${subredditName}`)
+  })
   await redditApiCall(ctx, () => post.setSuggestedCommentSort('NEW'), `set suggested sort for ${post.id}`)
   await lockPreviousMonthlyPost(ctx, previousPost, post.id)
   await redditApiCall(ctx, () => post.sticky(), `sticky monthly post ${post.id}`)
@@ -97,19 +106,96 @@ async function createOrRefreshMonthlyPost(
   }), `create monthly post modmail for r/${subredditName}`)
 }
 
+async function submitMonthlyPost(
+  ctx: JobContext,
+  options: {
+    subredditName: string
+    title: string
+    bodyTemplate: string
+    botName: string
+    previous: { title: string; permalink: string } | null
+    flairId?: string
+  },
+): Promise<CreatedMonthlyPost> {
+  return redditApiCall(ctx, () => ctx.reddit.submitPost({
+    subredditName: options.subredditName,
+    title: options.title,
+    text: render(options.bodyTemplate, {
+      bot_name: options.botName,
+      subreddit_name: options.subredditName,
+      previous_month_submission: options.previous ?? {
+        title: 'Previous monthly thread',
+        permalink: `https://www.reddit.com/r/${options.subredditName}/`,
+      },
+    }),
+    sendreplies: false,
+    flairId: options.flairId,
+  }), `submit monthly post to r/${options.subredditName}`)
+}
+
+async function tryReuseExistingMonthlyPost(
+  ctx: JobContext,
+  subredditName: string,
+  existing: MonthlyPostCandidate,
+): Promise<boolean> {
+  if (!isUsableMonthlyPost(existing)) {
+    console.warn(`Existing monthly post ${existing.id} is removed, deleted, or archived; creating replacement`)
+    return false
+  }
+
+  try {
+    if (!existing.stickied) await redditApiCall(ctx, () => existing.sticky(), `sticky existing monthly post ${existing.id}`)
+    await ctx.redis.set('currentMonthlyPost', existing.id)
+    console.debug(`Monthly post already exists for r/${subredditName}: ${existing.id}`)
+    return true
+  } catch (error) {
+    if (!isUnusablePostError(error)) throw error
+    console.warn(`Existing monthly post ${existing.id} could not be reused: ${errorText(error)}`)
+    return false
+  }
+}
+
 async function lockPreviousMonthlyPost(
   ctx: JobContext,
   previousPost: PreviousMonthlyPost | null,
   currentPostId: string,
 ): Promise<void> {
   if (!previousPost || previousPost.id === currentPostId) return
+  if (!isUsableMonthlyPost(previousPost)) {
+    console.warn(`Skipping stale previous monthly post ${previousPost.id}: removed, deleted, or archived`)
+    return
+  }
   if (previousPost.stickied) {
-    await redditApiCall(ctx, () => previousPost.unsticky(), `unsticky previous monthly post ${previousPost.id}`)
+    try {
+      await redditApiCall(ctx, () => previousPost.unsticky(), `unsticky previous monthly post ${previousPost.id}`)
+    } catch (error) {
+      if (!isUnusablePostError(error)) throw error
+      console.warn(`Could not unsticky stale previous monthly post ${previousPost.id}: ${errorText(error)}`)
+      return
+    }
   }
   if (previousPost.locked !== true) {
-    await redditApiCall(ctx, () => previousPost.lock(), `lock previous monthly post ${previousPost.id}`)
+    try {
+      await redditApiCall(ctx, () => previousPost.lock(), `lock previous monthly post ${previousPost.id}`)
+    } catch (error) {
+      if (!isUnusablePostError(error)) throw error
+      console.warn(`Could not lock stale previous monthly post ${previousPost.id}: ${errorText(error)}`)
+      return
+    }
   }
   console.debug(`Locked previous monthly post ${previousPost.id}`)
+}
+
+function isUsableMonthlyPost(post: Pick<PreviousMonthlyPost, 'removed' | 'spam' | 'archived' | 'removedByCategory'>): boolean {
+  return post.removed !== true &&
+    post.spam !== true &&
+    post.archived !== true &&
+    post.removedByCategory !== 'deleted'
+}
+
+function isUnusablePostError(error: unknown): boolean {
+  const text = errorText(error)
+  return /\b(400|404)\b/.test(text) || /bad request|not found|deleted|removed/i.test(text)
 }
 
 function monthlyPostClaimKey(subredditName: string, when: Date): string {
@@ -125,13 +211,16 @@ async function findExistingPostForMonth(
   subredditName: string,
   when: Date,
   botUsername: string,
-) {
+  title: string,
+): Promise<MonthlyPostCandidate | null> {
   const recent = await redditApiCall(ctx, () =>
     ctx.reddit.getPostsByUser({ username: botUsername, sort: 'new', limit: 25 }).all(),
   `get recent posts by u/${botUsername}`)
   return recent.find(p =>
     p.subredditName === subredditName &&
+    p.title === title &&
     p.createdAt.getUTCFullYear() === when.getUTCFullYear() &&
-    p.createdAt.getUTCMonth() === when.getUTCMonth(),
+    p.createdAt.getUTCMonth() === when.getUTCMonth() &&
+    isUsableMonthlyPost(p),
   ) ?? null
 }
