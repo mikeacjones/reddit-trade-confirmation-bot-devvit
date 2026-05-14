@@ -99,7 +99,10 @@ function mockMonthlyContext(
   return { ctx: ctx as any, redis, previousPost, newPost, submitPost }
 }
 
-function mockConfirmationContext(initial: Record<string, string> = {}) {
+function mockConfirmationContext(
+  initial: Record<string, string> = {},
+  options: { setUserFlair?: any } = {},
+) {
   const redis = mockRedis({
     currentMonthlyPost: 't3_post',
     'flairTemplates:plasticmodelexchange': JSON.stringify([
@@ -113,7 +116,7 @@ function mockConfirmationContext(initial: Record<string, string> = {}) {
     'confirmations:buyer': '2',
     ...initial,
   })
-  const setUserFlair = vi.fn(async () => undefined)
+  const setUserFlair = options.setUserFlair ?? vi.fn(async () => undefined)
   const setUserFlairBatch = vi.fn(async () => [{ ok: true }])
   const submitComment = vi.fn(async () => undefined)
   const ctx = {
@@ -464,6 +467,26 @@ describe('onCommentSubmit', () => {
     })
     expect(setUserFlair).toHaveBeenCalledTimes(2)
     expect(submitComment).toHaveBeenCalledOnce()
+
+    expect(JSON.parse(redis.store.get('userFlair:plasticmodelexchange:seller') ?? '{}')).toEqual(expect.objectContaining({
+      count: 5,
+      text: 'Trades: 5',
+    }))
+    expect(JSON.parse(redis.store.get('userFlair:plasticmodelexchange:buyer') ?? '{}')).toEqual(expect.objectContaining({
+      count: 3,
+      text: 'Trades: 3',
+    }))
+    expect(redis.store.get('userFlairLock:plasticmodelexchange:seller')).toBeUndefined()
+    expect(redis.store.get('userFlairLock:plasticmodelexchange:buyer')).toBeUndefined()
+
+    expect(callOrder(redis.api.set, key => key === 'userFlairLock:plasticmodelexchange:seller'))
+      .toBeLessThan(callOrder(setUserFlair, options => options.username === 'seller'))
+    expect(callOrder(setUserFlair, options => options.username === 'seller'))
+      .toBeLessThan(callOrder(redis.api.del, key => key === 'userFlairLock:plasticmodelexchange:seller'))
+    expect(callOrder(redis.api.set, key => key === 'userFlairLock:plasticmodelexchange:buyer'))
+      .toBeLessThan(callOrder(setUserFlair, options => options.username === 'buyer'))
+    expect(callOrder(setUserFlair, options => options.username === 'buyer'))
+      .toBeLessThan(callOrder(redis.api.del, key => key === 'userFlairLock:plasticmodelexchange:buyer'))
   })
 
   it('does not change counts when the parent claim already exists', async () => {
@@ -486,7 +509,65 @@ describe('onCommentSubmit', () => {
     expect(redis.store.get('confirmations:buyer')).toBe('3')
     expect(setUserFlair).not.toHaveBeenCalled()
   })
+
+  it('uses the cached user flair as old flair when Reddit payload flair is stale', async () => {
+    const { ctx, event, redis, submitComment } = mockConfirmationContext({
+      'confirmations:buyer': '3',
+      'userFlair:plasticmodelexchange:buyer': JSON.stringify({
+        text: 'Trades: 3',
+        count: 3,
+        setAt: '2026-05-08T00:00:00.000Z',
+      }),
+    })
+
+    await onCommentSubmit(event, ctx)
+
+    expect(redis.store.get('confirmations:buyer')).toBe('4')
+    expect(JSON.parse(redis.store.get('userFlair:plasticmodelexchange:buyer') ?? '{}')).toEqual(expect.objectContaining({
+      count: 4,
+      text: 'Trades: 4',
+    }))
+    expect(submitComment).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining('[`u/buyer`](https://reddit.com/u/buyer) updated from `Trades: 3` to `Trades: 4`'),
+    }))
+  })
+
+  it('does not apply an older flair after a newer count has already committed', async () => {
+    let ctxRef: any
+    const setUserFlair = vi.fn(async (options: { username: string }) => {
+      if (options.username === 'seller') {
+        await ctxRef.redis.set('confirmations:buyer', '4')
+        await ctxRef.redis.set('userFlair:plasticmodelexchange:buyer', JSON.stringify({
+          text: 'Trades: 4',
+          count: 4,
+          setAt: '2026-05-08T00:00:00.000Z',
+        }))
+      }
+    })
+    const { ctx, event } = mockConfirmationContext({}, { setUserFlair })
+    ctxRef = ctx
+
+    await onCommentSubmit(event, ctx)
+
+    expect(setUserFlair).toHaveBeenCalledWith(expect.objectContaining({
+      username: 'seller',
+      text: 'Trades: 5',
+    }))
+    expect(setUserFlair).not.toHaveBeenCalledWith(expect.objectContaining({
+      username: 'buyer',
+      text: 'Trades: 3',
+    }))
+  })
 })
+
+function callOrder(
+  fn: { mock: { calls: any[][]; invocationCallOrder: number[] } },
+  predicate: (...args: any[]) => boolean,
+): number {
+  const index = fn.mock.calls.findIndex(args => predicate(...args))
+  if (index < 0) throw new Error('Expected matching mock call')
+  return fn.mock.invocationCallOrder[index]
+}
 
 describe('approveConfirmationFromComment', () => {
   it('manually approves a selected confirmation comment', async () => {
