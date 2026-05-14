@@ -6,6 +6,7 @@ import { loadFlairTemplates, refreshFlairTemplateCache } from './flairCache.js'
 import { setUserFlairWithFallback } from './flairAssignment.js'
 import { isUserModerator } from './moderators.js'
 import { redditApiCall, type RedditApiContext } from './redditApi.js'
+import { cacheUserFlair, getCachedUserFlair, withUserFlairLock } from './userFlairState.js'
 
 const REDDIT_USERNAME_PATTERN = /^[A-Za-z0-9_-]{3,20}$/
 
@@ -36,17 +37,21 @@ export async function adjustUserTradeCount(
   const previousCount = await ctx.redis.get(countKey)
   const previousStoredCount = parseStoredCount(previousCount)
   const oldTpl = previousStoredCount === null ? null : findFlairTemplate(flairTemplates, previousStoredCount, isMod)
-  const oldFlair = oldTpl && previousStoredCount !== null
+  const cachedOldFlair = await getCachedUserFlair(ctx, subredditName, username)
+  const oldFlair = cachedOldFlair ?? (oldTpl && previousStoredCount !== null
     ? formatFlairFromTemplate(oldTpl.template, previousStoredCount)
-    : null
+    : null)
   await ctx.redis.set(countKey, String(count))
 
   try {
-    await setUserFlairWithFallback(
-      ctx,
-      { subredditName, username, text: newFlair, flairTemplateId: tpl.id },
-      `set manual flair for u/${username}`,
-    )
+    await withUserFlairLock(ctx, subredditName, username, async () => {
+      await setUserFlairWithFallback(
+        ctx,
+        { subredditName, username, text: newFlair, flairTemplateId: tpl.id },
+        `set manual flair for u/${username}`,
+      )
+      await cacheUserFlair(ctx, subredditName, username, newFlair, count)
+    })
   } catch (error) {
     if (previousCount === undefined) await ctx.redis.del(countKey)
     else await ctx.redis.set(countKey, previousCount)

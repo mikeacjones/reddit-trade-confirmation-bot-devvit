@@ -16,6 +16,7 @@ import {
   redditApiCall,
   trySubmitCommentWithRetry,
 } from './redditApi.js'
+import { cacheUserFlair, getCachedUserFlair, getCachedUserFlairRecord, withUserFlairLock } from './userFlairState.js'
 import { errorText, expirationFromNow } from './utils.js'
 
 const PROCESSED_COMMENT_TTL_MS = 45 * 24 * 60 * 60 * 1000
@@ -379,7 +380,8 @@ async function buildConfirmationParticipant(
   oldFlairByUsername: Map<string, string | null>,
 ): Promise<ConfirmationParticipant> {
   const usernameLower = username.toLowerCase()
-  const oldFlair = oldFlairByUsername.get(usernameLower) ?? null
+  const cachedFlair = await getCachedUserFlair(ctx, subredditName, username)
+  const oldFlair = cachedFlair ?? oldFlairByUsername.get(usernameLower) ?? null
   const isMod = await isUserModerator(ctx, subredditName, username)
   return {
     username,
@@ -446,8 +448,8 @@ async function completeConfirmation(
   }
   console.debug(`Committed confirmation ${result.parentCommentId} from comment ${comment.id}`)
 
-  const parentResult = await applyCommittedFlair(ctx, subredditName, commit.parent, flairTemplates)
-  const confirmerResult = await applyCommittedFlair(ctx, subredditName, commit.confirmer, flairTemplates)
+  const parentResult = await applyCommittedFlairWithLock(ctx, subredditName, commit.parent, flairTemplates)
+  const confirmerResult = await applyCommittedFlairWithLock(ctx, subredditName, commit.confirmer, flairTemplates)
 
   const replyTo = result.replyToCommentId ?? comment.id
   const replyBody = render(await getTemplate(ctx, 'trade_confirmation'), {
@@ -564,28 +566,68 @@ function replayCommittedConfirmation(
   }
 }
 
-async function applyCommittedFlair(
+async function applyCommittedFlairWithLock(
   ctx: TriggerContext,
   subredditName: string,
   participant: CommittedConfirmationParticipant,
   flairTemplates: Map<[number, number], FlairTemplate>,
 ): Promise<CommittedConfirmationParticipant> {
-  const tpl = findFlairTemplate(flairTemplates, participant.newCount, participant.isModerator)
-    ?? findFlairTemplate(await refreshFlairTemplateCache(ctx, subredditName), participant.newCount, participant.isModerator)
-  if (!tpl) return { ...participant, newFlair: null }
+  return withUserFlairLock(ctx, subredditName, participant.username, async () => {
+    const storedCount = parseStoredCount(await ctx.redis.get(participant.countKey))
+    const cachedFlair = await getCachedUserFlairRecord(ctx, subredditName, participant.username)
+    if (storedCount !== null && storedCount > participant.newCount) {
+      const currentFlair = cachedFlair && cachedFlair.count >= storedCount
+        ? cachedFlair.text
+        : await formatCommittedFlair(ctx, subredditName, storedCount, participant.isModerator, flairTemplates)
+      return {
+        ...participant,
+        newCount: storedCount,
+        newFlair: currentFlair,
+      }
+    }
 
-  const newFlair = formatFlairFromTemplate(tpl.template, participant.newCount)
-  await trySetUserFlairWithFallback(
-    ctx,
-    {
-      subredditName,
-      username: participant.username,
-      text: newFlair,
-      flairTemplateId: tpl.id,
-    },
-    `set flair for u/${participant.username}`,
-  )
-  return { ...participant, newFlair }
+    const oldFlair = cachedFlair?.text ?? participant.oldFlair
+    const tpl = await findCommittedFlairTemplate(ctx, subredditName, participant.newCount, participant.isModerator, flairTemplates)
+    if (!tpl) return { ...participant, oldFlair, newFlair: null }
+
+    const newFlair = formatFlairFromTemplate(tpl.template, participant.newCount)
+    const applied = await trySetUserFlairWithFallback(
+      ctx,
+      {
+        subredditName,
+        username: participant.username,
+        text: newFlair,
+        flairTemplateId: tpl.id,
+      },
+      `set flair for u/${participant.username}`,
+    )
+    if (!applied) return { ...participant, oldFlair, newFlair: null }
+
+    await cacheUserFlair(ctx, subredditName, participant.username, newFlair, participant.newCount)
+    return { ...participant, oldFlair, newFlair }
+  })
+}
+
+async function formatCommittedFlair(
+  ctx: TriggerContext,
+  subredditName: string,
+  count: number,
+  isModerator: boolean,
+  flairTemplates: Map<[number, number], FlairTemplate>,
+): Promise<string | null> {
+  const tpl = await findCommittedFlairTemplate(ctx, subredditName, count, isModerator, flairTemplates)
+  return tpl ? formatFlairFromTemplate(tpl.template, count) : null
+}
+
+async function findCommittedFlairTemplate(
+  ctx: TriggerContext,
+  subredditName: string,
+  count: number,
+  isModerator: boolean,
+  flairTemplates: Map<[number, number], FlairTemplate>,
+): Promise<FlairTemplate | null> {
+  return findFlairTemplate(flairTemplates, count, isModerator)
+    ?? findFlairTemplate(await refreshFlairTemplateCache(ctx, subredditName), count, isModerator)
 }
 
 function uniqueUsernames(usernames: string[]): string[] {
