@@ -14,9 +14,9 @@
     "@devvit/public-api": "0.12.24"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^1.6.1",
+    "@vitest/coverage-v8": "^4.1.7",
     "typescript": "^6.0.3",
-    "vitest": "^1.6.0"
+    "vitest": "^4.1.7"
   },
   "license": "BSD-3-Clause"
 }
