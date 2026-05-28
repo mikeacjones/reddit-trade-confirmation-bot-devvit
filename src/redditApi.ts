@@ -10,7 +10,7 @@ const MAX_RATE_LIMIT_SLEEP_MS = 20 * 1000
 
 const REDDIT_API_BACKOFF_KEY = 'reddit:api-backoff-until'
 
-export type RedditApiContext = Pick<TriggerContext, 'reddit' | 'redis'>
+export type RedditApiContext = Pick<TriggerContext, 'reddit' | 'redis' | 'settings'>
 
 export async function trySubmitCommentWithRetry(ctx: TriggerContext, id: string, text: string): Promise<boolean> {
   return tryRedditWriteWithRetry(ctx, async () => {

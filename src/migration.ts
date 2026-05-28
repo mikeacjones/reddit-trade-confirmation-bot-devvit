@@ -1,3 +1,4 @@
+import { getLanguageSettings } from './language.js'
 import { parseTradeCount } from './rules.js'
 import { redditApiCall, type RedditApiContext } from './redditApi.js'
 import { errorText, expirationFromNow } from './utils.js'
@@ -51,6 +52,7 @@ async function importExistingFlairCountsOnce(
   ctx: RedditApiContext,
   subredditName: string,
 ): Promise<FlairCountImportResult> {
+  const { flairCountLabel } = await getLanguageSettings(ctx)
   const sub = await redditApiCall(ctx, () => ctx.reddit.getSubredditByName(subredditName), `get subreddit ${subredditName}`)
   const result = emptyResult(subredditName, false)
   let after: string | undefined
@@ -64,7 +66,7 @@ async function importExistingFlairCountsOnce(
     for (const user of page.users) {
       result.scanned++
       const username = user.user?.trim()
-      const count = user.flairText ? parseTradeCount(user.flairText) : null
+      const count = user.flairText ? parseTradeCount(user.flairText, flairCountLabel) : null
       if (!username || count === null) {
         result.skippedUnparseable++
         continue

@@ -1,14 +1,31 @@
-const FLAIR_PATTERN = /Trades: (\d+)/
-const FLAIR_TEMPLATE_PATTERN = /Trades: ((\d+)-(\d+))/
+import { DEFAULT_LANGUAGE_SETTINGS } from './language.js'
 
-export function parseTradeCount(flairText: string | null | undefined): number | null {
+const REGEX_ESCAPE = /[.*+?^${}()|[\]\\]/g
+const escape = (s: string) => s.replace(REGEX_ESCAPE, '\\$&')
+
+function flairCountPattern(label: string): RegExp {
+  return new RegExp(`${escape(label)} (\\d+)`)
+}
+
+function flairRangePattern(label: string): RegExp {
+  return new RegExp(`${escape(label)} ((\\d+)-(\\d+))`)
+}
+
+export function parseTradeCount(
+  flairText: string | null | undefined,
+  label: string = DEFAULT_LANGUAGE_SETTINGS.flairCountLabel,
+): number | null {
   if (!flairText) return 0
-  const m = flairText.match(FLAIR_PATTERN)
+  const m = flairText.match(flairCountPattern(label))
   return m ? parseInt(m[1], 10) : null
 }
 
-export function formatFlairFromTemplate(template: string, count: number): string {
-  const m = template.match(FLAIR_TEMPLATE_PATTERN)
+export function formatFlairFromTemplate(
+  template: string,
+  count: number,
+  label: string = DEFAULT_LANGUAGE_SETTINGS.flairCountLabel,
+): string {
+  const m = template.match(flairRangePattern(label))
   if (!m) return template
   const [start, end] = [m.index! + m[0].indexOf(m[1]), m.index! + m[0].indexOf(m[1]) + m[1].length]
   return template.slice(0, start) + String(count) + template.slice(end)
@@ -32,9 +49,6 @@ export function findFlairTemplate(
   }
   return null
 }
-
-const REGEX_ESCAPE = /[.*+?^${}()|[\]\\]/g
-const escape = (s: string) => s.replace(REGEX_ESCAPE, '\\$&')
 
 export function isUsernameMentioned(parentBody: string, username: string): boolean {
   const cleaned = parentBody.replace(/\\/g, '')
@@ -76,7 +90,21 @@ export interface ValidationResult {
   replyToCommentId?: string
 }
 
-export function evaluateConfirmation(comment: CommentInput, ctx: ConfirmationContext): ValidationResult {
+export interface ConfirmationKeywords {
+  confirmed: string
+  approved: string
+}
+
+export const DEFAULT_CONFIRMATION_KEYWORDS: ConfirmationKeywords = {
+  confirmed: DEFAULT_LANGUAGE_SETTINGS.confirmationKeyword,
+  approved: DEFAULT_LANGUAGE_SETTINGS.approvalKeyword,
+}
+
+export function evaluateConfirmation(
+  comment: CommentInput,
+  ctx: ConfirmationContext,
+  keywords: ConfirmationKeywords = DEFAULT_CONFIRMATION_KEYWORDS,
+): ValidationResult {
   if (comment.isRoot) {
     return { valid: false }
   }
@@ -87,10 +115,12 @@ export function evaluateConfirmation(comment: CommentInput, ctx: ConfirmationCon
   if (ctx.parentAuthorName === comment.authorName) return { valid: false }
 
   const body = comment.body.toLowerCase()
+  const approvedKeyword = keywords.approved.toLowerCase()
+  const confirmedKeyword = keywords.confirmed.toLowerCase()
 
   // Mod approval path: comment replies to a confirmation (parent is non-root).
   if (!ctx.parentIsRoot) {
-    if (body.includes('approved') && ctx.isModerator) {
+    if (body.includes(approvedKeyword) && ctx.isModerator) {
       if (ctx.grandparentExists && ctx.grandparentIsRoot) {
         return {
           valid: true,
@@ -105,7 +135,7 @@ export function evaluateConfirmation(comment: CommentInput, ctx: ConfirmationCon
     return { valid: false }
   }
 
-  if (!body.includes('confirmed')) return { valid: false }
+  if (!body.includes(confirmedKeyword)) return { valid: false }
 
   if (ctx.parentIsSaved) {
     return {

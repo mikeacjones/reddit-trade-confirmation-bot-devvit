@@ -18,12 +18,15 @@ function mockRedis(initial: Record<string, string> = {}) {
 function mockContext(options: {
   initial?: Record<string, string>
   templates?: Array<{ id: string; text: string; modOnly?: boolean }>
+  settings?: Record<string, string>
 } = {}) {
   const redis = mockRedis(options.initial ?? {})
   const getUserFlairTemplates = vi.fn(async () => options.templates ?? [])
   const sub = { getUserFlairTemplates }
+  const settings = options.settings ?? {}
   const ctx = {
     redis: redis.api,
+    settings: { get: vi.fn(async (name: string) => settings[name]) },
     reddit: {
       getSubredditByName: vi.fn(async () => sub),
     },
@@ -120,5 +123,21 @@ describe('refreshFlairTemplateCache', () => {
     await refreshFlairTemplateCache(ctx, 'PlasticModelExchange')
 
     expect(redis.store.has('flairTemplates:plasticmodelexchange')).toBe(true)
+  })
+
+  it('matches the configured flair count label', async () => {
+    const { ctx, redis } = mockContext({
+      settings: { flair_count_label: 'Negocios:' },
+      templates: [
+        { id: 'tpl-es', text: 'Negocios: 0-99', modOnly: false },
+        { id: 'tpl-en', text: 'Trades: 0-99', modOnly: false },
+      ],
+    })
+
+    const result = await refreshFlairTemplateCache(ctx, 'PlasticModelExchange')
+
+    expect(result.size).toBe(1)
+    const stored = JSON.parse(redis.store.get('flairTemplates:plasticmodelexchange') ?? '[]')
+    expect(stored.map((t: any) => t.id)).toEqual(['tpl-es'])
   })
 })

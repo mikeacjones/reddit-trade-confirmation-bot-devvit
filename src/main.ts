@@ -12,6 +12,7 @@ import {
   rescanCurrentMonthlyPost,
 } from './handlers.js'
 import { defaults } from './defaults/index.js'
+import { DEFAULT_LANGUAGE_SETTINGS, getLanguageSettings } from './language.js'
 
 Devvit.configure({ redditAPI: true, redis: true })
 
@@ -23,6 +24,36 @@ Devvit.addSettings([
   { name: 'cant_confirm_username', type: 'paragraph', label: "Can't-confirm-username reply", defaultValue: defaults.cant_confirm_username },
   { name: 'old_confirmation_thread', type: 'paragraph', label: 'Old-thread reply', defaultValue: defaults.old_confirmation_thread },
   { name: 'monthly_post_flair_id', type: 'string', label: 'Optional submission flair ID', defaultValue: '' },
+  {
+    name: 'confirmation_keyword',
+    type: 'string',
+    label: 'Confirmation keyword (substring users must include in a reply to confirm a trade)',
+    defaultValue: DEFAULT_LANGUAGE_SETTINGS.confirmationKeyword,
+  },
+  {
+    name: 'approval_keyword',
+    type: 'string',
+    label: 'Moderator approval keyword (substring a moderator includes to approve a confirmation)',
+    defaultValue: DEFAULT_LANGUAGE_SETTINGS.approvalKeyword,
+  },
+  {
+    name: 'flair_count_label',
+    type: 'string',
+    label: 'Flair count label (text before the trade count in user flair, e.g. "Trades:")',
+    defaultValue: DEFAULT_LANGUAGE_SETTINGS.flairCountLabel,
+  },
+  {
+    name: 'moderator_flair_prefix',
+    type: 'string',
+    label: 'Moderator flair prefix (text prepended to moderator flair, e.g. "Moderator")',
+    defaultValue: DEFAULT_LANGUAGE_SETTINGS.moderatorFlairPrefix,
+  },
+  {
+    name: 'date_locale',
+    type: 'string',
+    label: 'Date locale for month names in monthly post title (BCP 47 tag, e.g. "en-US", "es-ES", "de-DE")',
+    defaultValue: DEFAULT_LANGUAGE_SETTINGS.dateLocale,
+  },
 ])
 
 const adjustTradeCountForm = Devvit.createForm({
@@ -159,20 +190,22 @@ Devvit.addMenuItem({
       return
     }
     const { name } = await redditApiCall(ctx, () => ctx.reddit.getCurrentSubreddit(), 'get current subreddit')
+    const { flairCountLabel, moderatorFlairPrefix } = await getLanguageSettings(ctx)
     for (let i = 0; i < 10; i++) {
       const min = i * 100
       const max = i === 9 ? 99999 : min + 99
       const bg = randomHex()
+      const text = `${flairCountLabel} ${min}-${max}`
       await redditApiCall(ctx, () => ctx.reddit.createUserFlairTemplate({
         subredditName: name,
-        text: `Trades: ${min}-${max}`,
+        text,
         backgroundColor: bg,
         textColor: pickTextColor(bg),
-      }), `create flair template Trades: ${min}-${max}`)
+      }), `create flair template ${text}`)
     }
     await redditApiCall(ctx, () => ctx.reddit.createUserFlairTemplate({
       subredditName: name,
-      text: 'Moderator | Trades: 0-99999',
+      text: `${moderatorFlairPrefix} | ${flairCountLabel} 0-99999`,
       backgroundColor: '#46d160',
       textColor: 'dark',
       modOnly: true,

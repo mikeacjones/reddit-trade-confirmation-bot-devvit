@@ -8,6 +8,7 @@ import {
   type ValidationResult,
 } from './rules.js'
 import { defaults } from './defaults/index.js'
+import { getLanguageSettings, type LanguageSettings } from './language.js'
 import { render } from './templates.js'
 import { trySetUserFlairWithFallback } from './flairAssignment.js'
 import { loadFlairTemplates, refreshFlairTemplateCache } from './flairCache.js'
@@ -146,6 +147,7 @@ async function processCommentOnce(
   comment: ProcessableComment,
   subredditName: string,
 ): Promise<boolean> {
+  const language = await getLanguageSettings(ctx)
   const submission = await redditApiCall(ctx, () => ctx.reddit.getPostById(comment.postId as `t3_${string}`), `get post ${comment.postId}`)
   const botUser = await redditApiCall(ctx, () => ctx.reddit.getAppUser(), 'get app user')
   if (!botUser) return true
@@ -156,7 +158,9 @@ async function processCommentOnce(
   const isModerator = await isUserModerator(ctx, subredditName, comment.author)
 
   const parent = await fetchComment(ctx, comment.parentId)
-  const grandparent = shouldFetchGrandparent(comment, parent) ? await fetchComment(ctx, parent.parentId) : null
+  const grandparent = shouldFetchGrandparent(comment, parent, language.approvalKeyword)
+    ? await fetchComment(ctx, parent.parentId)
+    : null
 
   const result = evaluateConfirmation(
     {
@@ -181,6 +185,7 @@ async function processCommentOnce(
       grandparentId: grandparent?.id ?? '',
       isCurrentSubmission: isCurrent,
     },
+    { confirmed: language.confirmationKeyword, approved: language.approvalKeyword },
   )
 
   if (!result.valid) {
@@ -196,6 +201,7 @@ async function processCommentOnce(
     comment,
     result,
     oldFlairHints(comment, result, parent, grandparent),
+    language,
   )
   if (!completion.approved) {
     console.debug(`Rejecting ${comment.id}: parent comment ${result.parentCommentId} already claimed`)
@@ -213,6 +219,7 @@ export async function approveConfirmationFromComment(
     return { approved: false, message: 'Select a confirmation comment to approve' }
   }
 
+  const language = await getLanguageSettings(ctx)
   const target = await fetchComment(ctx, commentId)
   if (!target) {
     return { approved: false, message: 'Select a confirmation comment to approve' }
@@ -224,7 +231,7 @@ export async function approveConfirmationFromComment(
   if (!target.authorName) {
     return { approved: false, message: 'Selected comment has no processable author' }
   }
-  if (!target.body.toLowerCase().includes('confirmed')) {
+  if (!target.body.toLowerCase().includes(language.confirmationKeyword.toLowerCase())) {
     return { approved: false, message: 'Selected comment does not look like a confirmation' }
   }
 
@@ -270,7 +277,7 @@ export async function approveConfirmationFromComment(
     parentId: target.parentId,
     postId: target.postId,
     permalink: target.permalink,
-  }, result, manualApprovalFlairHints(parent, target))
+  }, result, manualApprovalFlairHints(parent, target), language)
 
   if (!completion.approved) {
     return {
@@ -334,8 +341,9 @@ async function fetchComment(ctx: TriggerContext, fullName: string): Promise<Fetc
 function shouldFetchGrandparent(
   comment: ProcessableComment,
   parent: FetchedComment | null,
+  approvalKeyword: string,
 ): parent is NonNullable<typeof parent> {
-  return !!parent && !parent.isRoot && comment.body.toLowerCase().includes('approved')
+  return !!parent && !parent.isRoot && comment.body.toLowerCase().includes(approvalKeyword.toLowerCase())
 }
 
 async function getTemplate(ctx: TriggerContext, name: string): Promise<string> {
@@ -427,6 +435,7 @@ async function completeConfirmation(
   comment: ProcessableComment,
   result: ValidationResult,
   oldFlairByUsername: Map<string, string | null>,
+  language: LanguageSettings,
 ): Promise<ManualApprovalResult> {
   const flairTemplates = await loadFlairTemplates(ctx, subredditName)
   const participants = await loadConfirmationParticipants(
@@ -448,8 +457,8 @@ async function completeConfirmation(
   }
   console.debug(`Committed confirmation ${result.parentCommentId} from comment ${comment.id}`)
 
-  const parentResult = await applyCommittedFlairWithLock(ctx, subredditName, commit.parent, flairTemplates)
-  const confirmerResult = await applyCommittedFlairWithLock(ctx, subredditName, commit.confirmer, flairTemplates)
+  const parentResult = await applyCommittedFlairWithLock(ctx, subredditName, commit.parent, flairTemplates, language.flairCountLabel)
+  const confirmerResult = await applyCommittedFlairWithLock(ctx, subredditName, commit.confirmer, flairTemplates, language.flairCountLabel)
 
   const replyTo = result.replyToCommentId ?? comment.id
   const replyBody = render(await getTemplate(ctx, 'trade_confirmation'), {
@@ -571,6 +580,7 @@ async function applyCommittedFlairWithLock(
   subredditName: string,
   participant: CommittedConfirmationParticipant,
   flairTemplates: Map<[number, number], FlairTemplate>,
+  flairCountLabel: string,
 ): Promise<CommittedConfirmationParticipant> {
   return withUserFlairLock(ctx, subredditName, participant.username, async () => {
     const storedCount = parseStoredCount(await ctx.redis.get(participant.countKey))
@@ -578,7 +588,7 @@ async function applyCommittedFlairWithLock(
     if (storedCount !== null && storedCount > participant.newCount) {
       const currentFlair = cachedFlair && cachedFlair.count >= storedCount
         ? cachedFlair.text
-        : await formatCommittedFlair(ctx, subredditName, storedCount, participant.isModerator, flairTemplates)
+        : await formatCommittedFlair(ctx, subredditName, storedCount, participant.isModerator, flairTemplates, flairCountLabel)
       return {
         ...participant,
         newCount: storedCount,
@@ -590,7 +600,7 @@ async function applyCommittedFlairWithLock(
     const tpl = await findCommittedFlairTemplate(ctx, subredditName, participant.newCount, participant.isModerator, flairTemplates)
     if (!tpl) return { ...participant, oldFlair, newFlair: null }
 
-    const newFlair = formatFlairFromTemplate(tpl.template, participant.newCount)
+    const newFlair = formatFlairFromTemplate(tpl.template, participant.newCount, flairCountLabel)
     const applied = await trySetUserFlairWithFallback(
       ctx,
       {
@@ -614,9 +624,10 @@ async function formatCommittedFlair(
   count: number,
   isModerator: boolean,
   flairTemplates: Map<[number, number], FlairTemplate>,
+  flairCountLabel: string,
 ): Promise<string | null> {
   const tpl = await findCommittedFlairTemplate(ctx, subredditName, count, isModerator, flairTemplates)
-  return tpl ? formatFlairFromTemplate(tpl.template, count) : null
+  return tpl ? formatFlairFromTemplate(tpl.template, count, flairCountLabel) : null
 }
 
 async function findCommittedFlairTemplate(
