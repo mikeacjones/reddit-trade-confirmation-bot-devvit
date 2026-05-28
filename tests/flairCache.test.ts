@@ -41,7 +41,7 @@ describe('loadFlairTemplates', () => {
       { min: 100, max: 999, id: 'tpl-b', template: 'Trades: 100-999', modOnly: false },
     ])
     const { ctx, getUserFlairTemplates } = mockContext({
-      initial: { 'flairTemplates:plasticmodelexchange': cached },
+      initial: { 'flairTemplates:plasticmodelexchange:Trades%3A': cached },
     })
 
     const result = await loadFlairTemplates(ctx, 'PlasticModelExchange')
@@ -52,7 +52,7 @@ describe('loadFlairTemplates', () => {
 
   it('refreshes the cache when the cached JSON is malformed', async () => {
     const { ctx, redis, getUserFlairTemplates } = mockContext({
-      initial: { 'flairTemplates:plasticmodelexchange': 'not json' },
+      initial: { 'flairTemplates:plasticmodelexchange:Trades%3A': 'not json' },
       templates: [{ id: 'tpl-a', text: 'Trades: 0-99', modOnly: false }],
     })
 
@@ -60,13 +60,13 @@ describe('loadFlairTemplates', () => {
 
     expect(result.size).toBe(1)
     expect(getUserFlairTemplates).toHaveBeenCalledOnce()
-    expect(redis.store.get('flairTemplates:plasticmodelexchange')).not.toBe('not json')
+    expect(redis.store.get('flairTemplates:plasticmodelexchange:Trades%3A')).not.toBe('not json')
   })
 
   it('refreshes the cache when cached entries are missing required fields', async () => {
     const cached = JSON.stringify([{ min: 0, max: 99, id: 'tpl-a' }])
     const { ctx, getUserFlairTemplates } = mockContext({
-      initial: { 'flairTemplates:plasticmodelexchange': cached },
+      initial: { 'flairTemplates:plasticmodelexchange:Trades%3A': cached },
       templates: [{ id: 'tpl-a', text: 'Trades: 0-99', modOnly: false }],
     })
 
@@ -99,7 +99,7 @@ describe('refreshFlairTemplateCache', () => {
     const result = await refreshFlairTemplateCache(ctx, 'PlasticModelExchange')
 
     expect(result.size).toBe(2)
-    const stored = JSON.parse(redis.store.get('flairTemplates:plasticmodelexchange') ?? '[]')
+    const stored = JSON.parse(redis.store.get('flairTemplates:plasticmodelexchange:Trades%3A') ?? '[]')
     expect(stored).toHaveLength(2)
     expect(stored.map((t: any) => t.id)).toEqual(['tpl-a', 'tpl-c'])
   })
@@ -111,7 +111,7 @@ describe('refreshFlairTemplateCache', () => {
 
     await refreshFlairTemplateCache(ctx, 'PlasticModelExchange')
 
-    const stored = JSON.parse(redis.store.get('flairTemplates:plasticmodelexchange') ?? '[]')
+    const stored = JSON.parse(redis.store.get('flairTemplates:plasticmodelexchange:Trades%3A') ?? '[]')
     expect(stored[0].modOnly).toBe(false)
   })
 
@@ -122,7 +122,7 @@ describe('refreshFlairTemplateCache', () => {
 
     await refreshFlairTemplateCache(ctx, 'PlasticModelExchange')
 
-    expect(redis.store.has('flairTemplates:plasticmodelexchange')).toBe(true)
+    expect(redis.store.has('flairTemplates:plasticmodelexchange:Trades%3A')).toBe(true)
   })
 
   it('matches the configured flair count label', async () => {
@@ -137,7 +137,67 @@ describe('refreshFlairTemplateCache', () => {
     const result = await refreshFlairTemplateCache(ctx, 'PlasticModelExchange')
 
     expect(result.size).toBe(1)
-    const stored = JSON.parse(redis.store.get('flairTemplates:plasticmodelexchange') ?? '[]')
+    const stored = JSON.parse(redis.store.get('flairTemplates:plasticmodelexchange:Negocios%3A') ?? '[]')
     expect(stored.map((t: any) => t.id)).toEqual(['tpl-es'])
+  })
+
+  it('writes the cache under a key namespaced by the configured label', async () => {
+    const { ctx, redis } = mockContext({
+      settings: { flair_count_label: 'Negocios:' },
+      templates: [{ id: 'tpl-es', text: 'Negocios: 0-99', modOnly: false }],
+    })
+
+    await refreshFlairTemplateCache(ctx, 'PlasticModelExchange')
+
+    expect(redis.store.has('flairTemplates:plasticmodelexchange:Negocios%3A')).toBe(true)
+    expect(redis.store.has('flairTemplates:plasticmodelexchange:Trades%3A')).toBe(false)
+  })
+})
+
+describe('cache invalidation on label change', () => {
+  it('treats a label change as a cache miss and refreshes from Reddit', async () => {
+    const staleCache = JSON.stringify([
+      { min: 0, max: 99, id: 'tpl-old', template: 'Trades: 0-99', modOnly: false },
+    ])
+    const { ctx, redis, getUserFlairTemplates } = mockContext({
+      initial: { 'flairTemplates:plasticmodelexchange:Trades%3A': staleCache },
+      settings: { flair_count_label: 'Negocios:' },
+      templates: [{ id: 'tpl-new', text: 'Negocios: 0-99', modOnly: false }],
+    })
+
+    const result = await loadFlairTemplates(ctx, 'PlasticModelExchange')
+
+    expect(getUserFlairTemplates).toHaveBeenCalledOnce()
+    const fresh = redis.store.get('flairTemplates:plasticmodelexchange:Negocios%3A')
+    expect(fresh).toBeDefined()
+    expect(JSON.parse(fresh!).map((t: any) => t.id)).toEqual(['tpl-new'])
+    expect([...result.values()].map(t => t.id)).toEqual(['tpl-new'])
+  })
+
+  it('keeps the cache under the old key untouched (it TTLs out)', async () => {
+    const staleCache = JSON.stringify([
+      { min: 0, max: 99, id: 'tpl-old', template: 'Trades: 0-99', modOnly: false },
+    ])
+    const { ctx, redis } = mockContext({
+      initial: { 'flairTemplates:plasticmodelexchange:Trades%3A': staleCache },
+      settings: { flair_count_label: 'Negocios:' },
+      templates: [{ id: 'tpl-new', text: 'Negocios: 0-99', modOnly: false }],
+    })
+
+    await loadFlairTemplates(ctx, 'PlasticModelExchange')
+
+    expect(redis.store.get('flairTemplates:plasticmodelexchange:Trades%3A')).toBe(staleCache)
+  })
+
+  it('hits the cache again after the label-change refresh', async () => {
+    const { ctx, getUserFlairTemplates } = mockContext({
+      settings: { flair_count_label: 'Negocios:' },
+      templates: [{ id: 'tpl-new', text: 'Negocios: 0-99', modOnly: false }],
+    })
+
+    await loadFlairTemplates(ctx, 'PlasticModelExchange')
+    await loadFlairTemplates(ctx, 'PlasticModelExchange')
+
+    expect(getUserFlairTemplates).toHaveBeenCalledOnce()
   })
 })

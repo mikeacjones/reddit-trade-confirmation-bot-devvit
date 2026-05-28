@@ -105,7 +105,7 @@ function mockConfirmationContext(
 ) {
   const redis = mockRedis({
     currentMonthlyPost: 't3_post',
-    'flairTemplates:plasticmodelexchange': JSON.stringify([
+    'flairTemplates:plasticmodelexchange:Trades%3A': JSON.stringify([
       { min: 0, max: 99, id: 'tpl-user', template: 'Trades: 0-99', modOnly: false },
     ]),
     moderators: JSON.stringify({
@@ -220,7 +220,7 @@ function mockContext(options: {
 }) {
   const subredditName = 'PlasticModelExchange'
   const redis = mockRedis({
-    'flairTemplates:plasticmodelexchange': JSON.stringify([
+    'flairTemplates:plasticmodelexchange:Trades%3A': JSON.stringify([
       { min: 0, max: 99, id: 'tpl-user', template: 'Trades: 0-99', modOnly: false },
       { min: 0, max: 99999, id: 'tpl-mod', template: 'Moderator | Trades: 0-99999', modOnly: true },
     ]),
