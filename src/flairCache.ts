@@ -19,17 +19,18 @@ export async function loadFlairTemplates(
   ctx: FlairTemplateContext,
   subredditName: string,
 ): Promise<Map<[number, number], FlairTemplate>> {
-  const cached = await ctx.redis.get(flairTemplateCacheKey(subredditName))
+  const { flairCountLabel } = await getLanguageSettings(ctx)
+  const cached = await ctx.redis.get(flairTemplateCacheKey(subredditName, flairCountLabel))
   if (cached) {
     const parsed = parseCachedFlairTemplates(cached)
     if (parsed) {
-      console.debug(`Flair template cache hit for r/${subredditName} (${parsed.size} templates)`)
+      console.debug(`Flair template cache hit for r/${subredditName} (${parsed.size} templates, label=${flairCountLabel})`)
       return parsed
     }
   }
 
-  console.debug(`Flair template cache miss for r/${subredditName}`)
-  return refreshFlairTemplateCache(ctx, subredditName)
+  console.debug(`Flair template cache miss for r/${subredditName} (label=${flairCountLabel})`)
+  return refreshFlairTemplateCacheWithLabel(ctx, subredditName, flairCountLabel)
 }
 
 export async function refreshFlairTemplateCache(
@@ -37,6 +38,14 @@ export async function refreshFlairTemplateCache(
   subredditName: string,
 ): Promise<Map<[number, number], FlairTemplate>> {
   const { flairCountLabel } = await getLanguageSettings(ctx)
+  return refreshFlairTemplateCacheWithLabel(ctx, subredditName, flairCountLabel)
+}
+
+async function refreshFlairTemplateCacheWithLabel(
+  ctx: FlairTemplateContext,
+  subredditName: string,
+  flairCountLabel: string,
+): Promise<Map<[number, number], FlairTemplate>> {
   const sub = await redditApiCall(ctx, () => ctx.reddit.getSubredditByName(subredditName), `get subreddit ${subredditName}`)
   const templates = await redditApiCall(ctx, () => sub.getUserFlairTemplates(), `get flair templates for r/${subredditName}`)
   const cached: CachedFlairTemplate[] = []
@@ -52,10 +61,10 @@ export async function refreshFlairTemplateCache(
       modOnly: t.modOnly ?? false,
     })
   }
-  await ctx.redis.set(flairTemplateCacheKey(subredditName), JSON.stringify(cached), {
+  await ctx.redis.set(flairTemplateCacheKey(subredditName, flairCountLabel), JSON.stringify(cached), {
     expiration: expirationFromNow(FLAIR_TEMPLATE_CACHE_TTL_MS),
   })
-  console.debug(`Flair template cache refreshed for r/${subredditName} (${cached.length} templates)`)
+  console.debug(`Flair template cache refreshed for r/${subredditName} (${cached.length} templates, label=${flairCountLabel})`)
   return flairTemplateMap(cached)
 }
 
@@ -92,6 +101,6 @@ function flairTemplateMap(templates: CachedFlairTemplate[]): Map<[number, number
   return result
 }
 
-function flairTemplateCacheKey(subredditName: string): string {
-  return `flairTemplates:${subredditName.toLowerCase()}`
+function flairTemplateCacheKey(subredditName: string, flairCountLabel: string): string {
+  return `flairTemplates:${subredditName.toLowerCase()}:${encodeURIComponent(flairCountLabel)}`
 }
