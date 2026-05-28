@@ -29,6 +29,18 @@ describe('parseTradeCount', () => {
   it('parses with prefix', () => {
     expect(parseTradeCount('The Pen Person | Trades: 650')).toBe(650)
   })
+
+  it('parses with a custom label', () => {
+    expect(parseTradeCount('Negocios: 12', 'Negocios:')).toBe(12)
+  })
+
+  it('returns null when the custom label does not match', () => {
+    expect(parseTradeCount('Trades: 12', 'Negocios:')).toBeNull()
+  })
+
+  it('escapes regex metacharacters in the label', () => {
+    expect(parseTradeCount('Trades (#): 5', 'Trades (#):')).toBe(5)
+  })
 })
 
 describe('formatFlairFromTemplate', () => {
@@ -42,6 +54,14 @@ describe('formatFlairFromTemplate', () => {
 
   it('returns the template unchanged if no range', () => {
     expect(formatFlairFromTemplate('No Range Here', 5)).toBe('No Range Here')
+  })
+
+  it('replaces the range using a custom label', () => {
+    expect(formatFlairFromTemplate('Negocios: 0-99', 7, 'Negocios:')).toBe('Negocios: 7')
+  })
+
+  it('returns the template unchanged when the custom label does not match', () => {
+    expect(formatFlairFromTemplate('Trades: 0-99', 7, 'Negocios:')).toBe('Trades: 0-99')
   })
 })
 
@@ -219,5 +239,50 @@ describe('evaluateConfirmation', () => {
     expect(r.confirmer).toBe('alice')
     expect(r.parentCommentId).toBe('p1')
     expect(r.replyToCommentId).toBe('c1')
+  })
+
+  it('accepts a custom confirmation keyword', () => {
+    const r = evaluateConfirmation(
+      { ...baseComment, body: 'confirmado!' },
+      baseContext,
+      { confirmed: 'confirmado', approved: 'aprobado' },
+    )
+    expect(r.valid).toBe(true)
+  })
+
+  it('rejects the English default when a custom keyword is configured', () => {
+    const r = evaluateConfirmation(
+      { ...baseComment, body: 'confirmed' },
+      baseContext,
+      { confirmed: 'confirmado', approved: 'aprobado' },
+    )
+    expect(r.valid).toBe(false)
+  })
+
+  it('mod approval works with a custom approved keyword', () => {
+    const r = evaluateConfirmation(
+      { ...baseComment, body: 'aprobado' },
+      {
+        ...baseContext,
+        parentIsRoot: false,
+        grandparentExists: true,
+        grandparentIsRoot: true,
+        grandparentAuthorName: 'carol',
+        grandparentId: 'gp1',
+        isModerator: true,
+      },
+      { confirmed: 'confirmado', approved: 'aprobado' },
+    )
+    expect(r.valid).toBe(true)
+    expect(r.isModApproval).toBe(true)
+  })
+
+  it('keyword matching is case-insensitive', () => {
+    const r = evaluateConfirmation(
+      { ...baseComment, body: 'CONFIRMADO' },
+      baseContext,
+      { confirmed: 'Confirmado', approved: 'Aprobado' },
+    )
+    expect(r.valid).toBe(true)
   })
 })

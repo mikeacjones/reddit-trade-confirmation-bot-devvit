@@ -53,4 +53,16 @@ describe('renderTitle', () => {
   it('combines codes', () => {
     expect(renderTitle('%B %Y', date)).toBe('January 2025')
   })
+
+  it('renders month names in a non-English locale', () => {
+    expect(renderTitle('%B', date, 'es-ES')).toBe('enero')
+  })
+
+  it('renders short month names in a non-English locale', () => {
+    expect(renderTitle('%b', date, 'de-DE')).toBe('Jan')
+  })
+
+  it('falls back to en-US when no locale is given', () => {
+    expect(renderTitle('%B', date)).toBe('January')
+  })
 })

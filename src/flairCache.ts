@@ -1,6 +1,10 @@
+import { getLanguageSettings } from './language.js'
 import { type FlairTemplate } from './rules.js'
 import { redditApiCall, type RedditApiContext } from './redditApi.js'
 import { expirationFromNow } from './utils.js'
+
+const REGEX_ESCAPE = /[.*+?^${}()|[\]\\]/g
+const escape = (s: string) => s.replace(REGEX_ESCAPE, '\\$&')
 
 const FLAIR_TEMPLATE_CACHE_TTL_MS = 12 * 60 * 60 * 1000
 
@@ -32,10 +36,11 @@ export async function refreshFlairTemplateCache(
   ctx: FlairTemplateContext,
   subredditName: string,
 ): Promise<Map<[number, number], FlairTemplate>> {
+  const { flairCountLabel } = await getLanguageSettings(ctx)
   const sub = await redditApiCall(ctx, () => ctx.reddit.getSubredditByName(subredditName), `get subreddit ${subredditName}`)
   const templates = await redditApiCall(ctx, () => sub.getUserFlairTemplates(), `get flair templates for r/${subredditName}`)
   const cached: CachedFlairTemplate[] = []
-  const RANGE = /Trades: (\d+)-(\d+)/
+  const RANGE = new RegExp(`${escape(flairCountLabel)} (\\d+)-(\\d+)`)
   for (const t of templates) {
     const m = t.text.match(RANGE)
     if (!m) continue

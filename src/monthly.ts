@@ -1,5 +1,6 @@
 import type { JobContext, ScheduledJobEvent } from '@devvit/public-api'
 import { defaults } from './defaults/index.js'
+import { getLanguageSettings } from './language.js'
 import { redditApiCall } from './redditApi.js'
 import { render, renderTitle } from './templates.js'
 import { errorText, expirationFromNow } from './utils.js'
@@ -77,7 +78,8 @@ async function createOrRefreshMonthlyPost(
   const titleTemplate = (await ctx.settings.get<string>('monthly_post_title')) || defaults.monthly_post_title
   const bodyTemplate = (await ctx.settings.get<string>('monthly_post')) || defaults.monthly_post
   const flairId = (await ctx.settings.get<string>('monthly_post_flair_id'))?.trim() || undefined
-  const title = renderTitle(titleTemplate, now)
+  const { dateLocale } = await getLanguageSettings(ctx)
+  const title = renderTitle(titleTemplate, now, dateLocale)
 
   const existing = botUser ? await findExistingPostForMonth(ctx, subredditName, now, botUser.username, title) : null
   if (existing) {

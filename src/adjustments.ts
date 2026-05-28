@@ -4,6 +4,7 @@ import {
 } from './rules.js'
 import { loadFlairTemplates, refreshFlairTemplateCache } from './flairCache.js'
 import { setUserFlairWithFallback } from './flairAssignment.js'
+import { getLanguageSettings } from './language.js'
 import { isUserModerator } from './moderators.js'
 import { redditApiCall, type RedditApiContext } from './redditApi.js'
 import { cacheUserFlair, getCachedUserFlair, withUserFlairLock } from './userFlairState.js'
@@ -23,6 +24,7 @@ export async function adjustUserTradeCount(
   if (!Number.isInteger(count) || count < 0) throw new Error('Trade count must be a non-negative whole number')
 
   const { name: subredditName } = await redditApiCall(ctx, () => ctx.reddit.getCurrentSubreddit(), 'get current subreddit')
+  const { flairCountLabel } = await getLanguageSettings(ctx)
   const isMod = await isUserModerator(ctx, subredditName, username)
   let flairTemplates = await loadFlairTemplates(ctx, subredditName)
   let tpl = findFlairTemplate(flairTemplates, count, isMod)
@@ -32,14 +34,14 @@ export async function adjustUserTradeCount(
   }
   if (!tpl) throw new Error(`No ${isMod ? 'moderator' : 'user'} flair template found for trade count ${count}`)
 
-  const newFlair = formatFlairFromTemplate(tpl.template, count)
+  const newFlair = formatFlairFromTemplate(tpl.template, count, flairCountLabel)
   const countKey = `confirmations:${username.toLowerCase()}`
   const previousCount = await ctx.redis.get(countKey)
   const previousStoredCount = parseStoredCount(previousCount)
   const oldTpl = previousStoredCount === null ? null : findFlairTemplate(flairTemplates, previousStoredCount, isMod)
   const cachedOldFlair = await getCachedUserFlair(ctx, subredditName, username)
   const oldFlair = cachedOldFlair ?? (oldTpl && previousStoredCount !== null
-    ? formatFlairFromTemplate(oldTpl.template, previousStoredCount)
+    ? formatFlairFromTemplate(oldTpl.template, previousStoredCount, flairCountLabel)
     : null)
   await ctx.redis.set(countKey, String(count))
 
