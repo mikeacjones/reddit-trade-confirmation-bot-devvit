@@ -16,6 +16,9 @@ export function parseTradeCount(
   label: string = DEFAULT_LANGUAGE_SETTINGS.flairCountLabel,
 ): number | null {
   if (!flairText) return 0
+  // Range text ("Trades: 5-9") is a flair template's text, not a user count;
+  // matching the count pattern against it would misread the range minimum.
+  if (flairRangePattern(label).test(flairText)) return null
   const m = flairText.match(flairCountPattern(label))
   return m ? parseInt(m[1], 10) : null
 }

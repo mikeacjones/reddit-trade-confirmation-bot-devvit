@@ -4,6 +4,7 @@ import {
   evaluateConfirmation,
   findFlairTemplate,
   formatFlairFromTemplate,
+  parseTradeCount,
   type FlairTemplate,
   type ValidationResult,
 } from './rules.js'
@@ -195,12 +196,15 @@ async function processCommentOnce(
     return true
   }
 
+  const confirmed = result.isModApproval
+    ? comment
+    : { ...comment, authorFlair: await fetchAuthorFlair(ctx, comment) }
   const completion = await completeConfirmation(
     ctx,
     subredditName,
-    comment,
+    confirmed,
     result,
-    oldFlairHints(comment, result, parent, grandparent),
+    oldFlairHints(confirmed, result, parent, grandparent),
     language,
   )
   if (!completion.approved) {
@@ -338,6 +342,19 @@ async function fetchComment(ctx: TriggerContext, fullName: string): Promise<Fetc
   }
 }
 
+// CommentSubmit payloads report the linked flair template's text (e.g.
+// "Trades: 5-9") rather than the author's actual flair text, so the
+// confirmer's old flair has to come from the comment API instead.
+async function fetchAuthorFlair(ctx: TriggerContext, comment: ProcessableComment): Promise<string | null> {
+  try {
+    const fetched = await fetchComment(ctx, comment.id)
+    return fetched ? fetched.authorFlair : comment.authorFlair
+  } catch (error) {
+    console.warn(`Failed to fetch author flair for ${comment.id}: ${errorText(error)}`)
+    return comment.authorFlair
+  }
+}
+
 function shouldFetchGrandparent(
   comment: ProcessableComment,
   parent: FetchedComment | null,
@@ -445,7 +462,7 @@ async function completeConfirmation(
     result.confirmer!,
     oldFlairByUsername,
   )
-  const commit = await commitConfirmation(ctx, comment, result, participants.parent, participants.confirmer)
+  const commit = await commitConfirmation(ctx, comment, result, participants.parent, participants.confirmer, language.flairCountLabel)
   if (!commit.committed) {
     return {
       approved: false,
@@ -492,6 +509,7 @@ async function commitConfirmation(
   result: ValidationResult,
   parent: ConfirmationParticipant,
   confirmer: ConfirmationParticipant,
+  flairCountLabel: string,
 ): Promise<ConfirmationCommit> {
   if (!result.parentCommentId) return { committed: false }
   const claimKey = `confirmed:${result.parentCommentId}`
@@ -512,7 +530,7 @@ async function commitConfirmation(
       const stored = parseStoredCount(await ctx.redis.get(participant.countKey))
       committed.set(participant.usernameLower, {
         ...participant,
-        newCount: (stored ?? 0) + 1,
+        newCount: (stored ?? seedCountFromFlair(participant.oldFlair, flairCountLabel)) + 1,
         newFlair: null,
       })
     }
@@ -664,4 +682,11 @@ function parseStoredCount(value: string | undefined): number | null {
   if (value === undefined) return null
   const parsed = parseInt(value, 10)
   return Number.isFinite(parsed) ? parsed : null
+}
+
+// A user the bot has never counted may still carry a real count in their
+// flair (set before install or by a moderator), so start from that instead
+// of zero when Redis has no record.
+function seedCountFromFlair(oldFlair: string | null, flairCountLabel: string): number {
+  return parseTradeCount(oldFlair, flairCountLabel) ?? 0
 }

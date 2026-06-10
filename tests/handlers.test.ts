@@ -101,7 +101,7 @@ function mockMonthlyContext(
 
 function mockConfirmationContext(
   initial: Record<string, string> = {},
-  options: { setUserFlair?: any } = {},
+  options: { setUserFlair?: any; confirmerApiFlair?: string | null } = {},
 ) {
   const redis = mockRedis({
     currentMonthlyPost: 't3_post',
@@ -134,13 +134,14 @@ function mockConfirmationContext(
       getAppUser: vi.fn(async () => ({ id: 't2_bot', username: 'swap-conf-bot' })),
       getCommentById: vi.fn(async (id: string) => {
         if (id === 't1_confirm') {
+          const apiFlair = 'confirmerApiFlair' in options ? options.confirmerApiFlair : 'Trades: 2'
           return {
             id: 't1_confirm',
             parentId: 't1_parent',
             postId: 't3_post',
             subredditName: 'PlasticModelExchange',
             authorName: 'buyer',
-            authorFlair: { text: 'Trades: 2' },
+            authorFlair: apiFlair === null ? undefined : { text: apiFlair },
             body: 'confirmed',
             permalink: 'https://reddit.test/r/PlasticModelExchange/comments/post/_/confirm',
             removed: false,
@@ -172,7 +173,9 @@ function mockConfirmationContext(
       postId: 't3_post',
       permalink: 'https://reddit.test/r/PlasticModelExchange/comments/post/_/confirm',
     },
-    author: { name: 'buyer', flair: { text: 'Trades: 2' } },
+    // CommentSubmit payloads report the linked flair template's text, not the
+    // author's actual flair text — mirror that so tests catch code trusting it.
+    author: { name: 'buyer', flair: { text: 'Trades: 0-99' } },
     subreddit: { name: 'PlasticModelExchange' },
   }
   return { ctx: ctx as any, event: event as any, redis, setUserFlair, submitComment }
@@ -185,6 +188,7 @@ function mockMigrationContext(initial: Record<string, string> = {}) {
       return {
         users: [
           { user: 'Carol', flairText: 'Trades: 3' },
+          { user: 'RangeFan', flairText: 'Trades: 0-99' },
         ],
       }
     }
@@ -416,15 +420,16 @@ describe('importExistingFlairCounts', () => {
 
     expect(result).toEqual(expect.objectContaining({
       pages: 2,
-      scanned: 6,
+      scanned: 7,
       imported: 3,
       skippedExisting: 1,
-      skippedUnparseable: 2,
+      skippedUnparseable: 3,
     }))
     expect(redis.store.get('confirmations:alice')).toBe('4')
     expect(redis.store.get('confirmations:bob')).toBe('12')
     expect(redis.store.get('confirmations:carol')).toBe('3')
     expect(redis.store.get('confirmations:zero')).toBe('0')
+    expect(redis.store.get('confirmations:rangefan')).toBeUndefined()
     expect(redis.store.get('flairImport:plasticmodelexchange:lastRun')).toContain('"imported":3')
     expect(getUserFlair).toHaveBeenCalledTimes(2)
   })
@@ -508,6 +513,46 @@ describe('onCommentSubmit', () => {
     expect(redis.store.get('confirmations:seller')).toBe('5')
     expect(redis.store.get('confirmations:buyer')).toBe('3')
     expect(setUserFlair).not.toHaveBeenCalled()
+  })
+
+  it('reports the confirmer\'s actual old flair from the API, not the template text in the event payload', async () => {
+    const { ctx, event, submitComment } = mockConfirmationContext()
+
+    await onCommentSubmit(event, ctx)
+
+    expect(submitComment).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining('[`u/buyer`](https://reddit.com/u/buyer) updated from `Trades: 2` to `Trades: 3`'),
+    }))
+  })
+
+  it('seeds a missing Redis count from the user\'s current flair instead of restarting at 1', async () => {
+    const { ctx, event, redis, submitComment } = mockConfirmationContext()
+    redis.store.delete('confirmations:buyer')
+
+    await onCommentSubmit(event, ctx)
+
+    expect(redis.store.get('confirmations:buyer')).toBe('3')
+    expect(submitComment).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining('[`u/buyer`](https://reddit.com/u/buyer) updated from `Trades: 2` to `Trades: 3`'),
+    }))
+  })
+
+  it('does not seed a count from flair-template range text', async () => {
+    const { ctx, event, redis } = mockConfirmationContext({}, { confirmerApiFlair: 'Trades: 0-99' })
+    redis.store.delete('confirmations:buyer')
+
+    await onCommentSubmit(event, ctx)
+
+    expect(redis.store.get('confirmations:buyer')).toBe('1')
+  })
+
+  it('treats a user with no flair as having no previous count', async () => {
+    const { ctx, event, redis } = mockConfirmationContext({}, { confirmerApiFlair: null })
+    redis.store.delete('confirmations:buyer')
+
+    await onCommentSubmit(event, ctx)
+
+    expect(redis.store.get('confirmations:buyer')).toBe('1')
   })
 
   it('uses the cached user flair as old flair when Reddit payload flair is stale', async () => {
