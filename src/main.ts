@@ -2,6 +2,7 @@ import { Devvit } from '@devvit/public-api'
 import {
   adjustUserTradeCount,
   approveConfirmationFromComment,
+  ensureJobsScheduled,
   importExistingFlairCounts,
   onCommentSubmit,
   onMonthlyPost,
@@ -95,10 +96,18 @@ Devvit.addTrigger({ event: 'ModAction', onEvent: onModAction })
 
 Devvit.addSchedulerJob({ name: 'monthly-post', onRun: onMonthlyPost })
 
+Devvit.addSchedulerJob({
+  name: 'rescan-monthly-post',
+  onRun: async (_e, ctx) => {
+    const { scanned, processed } = await rescanCurrentMonthlyPost(ctx)
+    if (processed > 0) console.log(`Hourly rescan: ${scanned} comments, ${processed} newly processed`)
+  },
+})
+
 Devvit.addTrigger({
   event: 'AppInstall',
   onEvent: async (_e, ctx) => {
-    await ctx.scheduler.runJob({ name: 'monthly-post', cron: '0 0 1 * *' })
+    await ensureJobsScheduled(ctx)
     const { name } = await redditApiCall(ctx, () => ctx.reddit.getCurrentSubreddit(), 'get current subreddit')
     await refreshModeratorCache(ctx, name)
   },
@@ -107,6 +116,7 @@ Devvit.addTrigger({
 Devvit.addTrigger({
   event: 'AppUpgrade',
   onEvent: async (_e, ctx) => {
+    await ensureJobsScheduled(ctx)
     const { name } = await redditApiCall(ctx, () => ctx.reddit.getCurrentSubreddit(), 'get current subreddit')
     await refreshModeratorCache(ctx, name)
   },
