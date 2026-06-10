@@ -41,6 +41,14 @@ describe('parseTradeCount', () => {
   it('escapes regex metacharacters in the label', () => {
     expect(parseTradeCount('Trades (#): 5', 'Trades (#):')).toBe(5)
   })
+
+  it('returns null for template range text rather than parsing the range minimum', () => {
+    expect(parseTradeCount('Trades: 5-9')).toBeNull()
+  })
+
+  it('returns null for range text with a custom label', () => {
+    expect(parseTradeCount('Negocios: 0-99', 'Negocios:')).toBeNull()
+  })
 })
 
 describe('formatFlairFromTemplate', () => {

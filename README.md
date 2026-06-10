@@ -12,6 +12,7 @@ A Reddit Devvit app that tracks completed trades for swap subreddits. When two u
 - **Confirmations.** When someone replies `confirmed` (case-insensitive substring) to a top-level comment in the current monthly thread, the bot validates it (the parent must tag the confirmer's username, the parent author must not be the confirmer, etc.), bumps trade counts for both users, applies updated flair, and replies.
 - **Mod approvals.** A moderator can post `approved` as a reply to a confirmation comment to count it manually.
 - **Manual adjustments.** Moderators can use **Set user trade count** to repair a user's count and apply the matching flair.
+- **Hourly rescan.** Every hour (at half past) the bot re-scans the current monthly thread and processes any confirmations it missed (for example, after Reddit API rate limiting). The same scan can be run on demand with **Re-scan monthly post comments**.
 - **Lock-down.** The previous monthly thread is locked as part of creating or refreshing the new monthly thread.
 
 ## Installation
@@ -118,7 +119,7 @@ All accessible from the subreddit's three-dot menu. Mods only.
 | Item | Effect |
 | --- | --- |
 | **Trigger monthly post now** | Runs the monthly-post job immediately (creates a new post, or re-stickies an existing one for this month, then locks the previous monthly thread). |
-| **Re-scan monthly post comments** | Walks all comments in the current monthly post and processes any confirmations the bot missed. |
+| **Re-scan monthly post comments** | Walks all comments in the current monthly post and processes any confirmations the bot missed. Also runs automatically every hour. |
 | **Set user trade count** | Opens a form to set one user's trade count and apply the matching Reddit user flair. |
 | **Import existing flair counts** | Scans current user flairs and imports parseable `Trades: N` counts. Counts already stored by the bot are kept. |
 | **Set up default user flairs** | One-time creation of the ten default `Trades: N-M` flair templates (see step 1). |
