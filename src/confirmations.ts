@@ -4,7 +4,6 @@ import {
   evaluateConfirmation,
   findFlairTemplate,
   formatFlairFromTemplate,
-  parseTradeCount,
   type FlairTemplate,
   type ValidationResult,
 } from './rules.js'
@@ -18,7 +17,7 @@ import {
   redditApiCall,
   trySubmitCommentWithRetry,
 } from './redditApi.js'
-import { cacheUserFlair, getCachedUserFlair, getCachedUserFlairRecord, withUserFlairLock } from './userFlairState.js'
+import { withUserFlairLock } from './userFlairState.js'
 import { errorText, expirationFromNow } from './utils.js'
 
 const PROCESSED_COMMENT_TTL_MS = 45 * 24 * 60 * 60 * 1000
@@ -30,7 +29,6 @@ interface ProcessableComment {
   id: string
   body: string
   author: string
-  authorFlair: string | null
   parentId: string
   postId: string
   permalink: string
@@ -42,7 +40,6 @@ interface FetchedComment {
   postId: string
   subredditName: string
   authorName: string
-  authorFlair: string | null
   removed: boolean
   isRoot: boolean
   body: string
@@ -53,12 +50,13 @@ interface ConfirmationParticipant {
   username: string
   usernameLower: string
   countKey: string
-  oldFlair: string | null
   isModerator: boolean
 }
 
 interface CommittedConfirmationParticipant extends ConfirmationParticipant {
+  oldCount: number
   newCount: number
+  oldFlair: string | null
   newFlair: string | null
 }
 
@@ -76,7 +74,9 @@ interface ConfirmationClaimRecord {
   confirmer: string
   parentAuthor: string
   modApproval: boolean
+  parentPreviousCount: number
   parentCount: number
+  confirmerPreviousCount: number
   confirmerCount: number
   createdAt: string
 }
@@ -96,7 +96,6 @@ export async function onCommentSubmit(event: CommentSubmit, ctx: TriggerContext)
     id: c.id,
     body: c.body,
     author: event.author?.name ?? '',
-    authorFlair: event.author?.flair?.text || null,
     parentId: c.parentId,
     postId: c.postId,
     permalink: c.permalink,
@@ -196,15 +195,11 @@ async function processCommentOnce(
     return true
   }
 
-  const confirmed = result.isModApproval
-    ? comment
-    : { ...comment, authorFlair: await fetchAuthorFlair(ctx, comment) }
   const completion = await completeConfirmation(
     ctx,
     subredditName,
-    confirmed,
+    comment,
     result,
-    oldFlairHints(confirmed, result, parent, grandparent),
     language,
   )
   if (!completion.approved) {
@@ -277,11 +272,10 @@ export async function approveConfirmationFromComment(
     id: target.id,
     body: target.body,
     author: target.authorName,
-    authorFlair: target.authorFlair,
     parentId: target.parentId,
     postId: target.postId,
     permalink: target.permalink,
-  }, result, manualApprovalFlairHints(parent, target), language)
+  }, result, language)
 
   if (!completion.approved) {
     return {
@@ -315,7 +309,6 @@ export async function rescanCurrentMonthlyPost(ctx: TriggerContext): Promise<{ s
       id: c.id,
       body: c.body,
       author: c.authorName,
-      authorFlair: c.authorFlair?.text ?? null,
       parentId: c.parentId,
       postId: c.postId,
       permalink: c.permalink,
@@ -334,24 +327,10 @@ async function fetchComment(ctx: TriggerContext, fullName: string): Promise<Fetc
     postId: c.postId,
     subredditName: c.subredditName,
     authorName: c.authorName,
-    authorFlair: c.authorFlair?.text ?? null,
     removed: c.removed ?? false,
     isRoot: c.parentId.startsWith('t3_'),
     body: c.body ?? '',
     permalink: c.permalink,
-  }
-}
-
-// CommentSubmit payloads report the linked flair template's text (e.g.
-// "Trades: 5-9") rather than the author's actual flair text, so the
-// confirmer's old flair has to come from the comment API instead.
-async function fetchAuthorFlair(ctx: TriggerContext, comment: ProcessableComment): Promise<string | null> {
-  try {
-    const fetched = await fetchComment(ctx, comment.id)
-    return fetched ? fetched.authorFlair : comment.authorFlair
-  } catch (error) {
-    console.warn(`Failed to fetch author flair for ${comment.id}: ${errorText(error)}`)
-    return comment.authorFlair
   }
 }
 
@@ -389,12 +368,11 @@ async function loadConfirmationParticipants(
   subredditName: string,
   parentUsername: string,
   confirmerUsername: string,
-  oldFlairByUsername: Map<string, string | null>,
 ): Promise<{ parent: ConfirmationParticipant; confirmer: ConfirmationParticipant }> {
-  const parent = await buildConfirmationParticipant(ctx, subredditName, parentUsername, oldFlairByUsername)
+  const parent = await buildConfirmationParticipant(ctx, subredditName, parentUsername)
   const confirmer = parent.usernameLower === confirmerUsername.toLowerCase()
     ? parent
-    : await buildConfirmationParticipant(ctx, subredditName, confirmerUsername, oldFlairByUsername)
+    : await buildConfirmationParticipant(ctx, subredditName, confirmerUsername)
   return { parent, confirmer }
 }
 
@@ -402,48 +380,15 @@ async function buildConfirmationParticipant(
   ctx: TriggerContext,
   subredditName: string,
   username: string,
-  oldFlairByUsername: Map<string, string | null>,
 ): Promise<ConfirmationParticipant> {
   const usernameLower = username.toLowerCase()
-  const cachedFlair = await getCachedUserFlair(ctx, subredditName, username)
-  const oldFlair = cachedFlair ?? oldFlairByUsername.get(usernameLower) ?? null
   const isMod = await isUserModerator(ctx, subredditName, username)
   return {
     username,
     usernameLower,
     countKey: `confirmations:${usernameLower}`,
-    oldFlair,
     isModerator: isMod,
   }
-}
-
-function oldFlairHints(
-  comment: ProcessableComment,
-  result: ValidationResult,
-  parent: FetchedComment | null,
-  grandparent: FetchedComment | null,
-): Map<string, string | null> {
-  const hints = new Map<string, string | null>()
-  if (result.parentAuthor) {
-    hints.set(
-      result.parentAuthor.toLowerCase(),
-      result.isModApproval ? grandparent?.authorFlair ?? null : parent?.authorFlair ?? null,
-    )
-  }
-  if (result.confirmer) {
-    hints.set(
-      result.confirmer.toLowerCase(),
-      result.isModApproval ? parent?.authorFlair ?? null : comment.authorFlair,
-    )
-  }
-  return hints
-}
-
-function manualApprovalFlairHints(parent: FetchedComment, target: FetchedComment): Map<string, string | null> {
-  return new Map([
-    [parent.authorName.toLowerCase(), parent.authorFlair],
-    [target.authorName.toLowerCase(), target.authorFlair],
-  ])
 }
 
 async function completeConfirmation(
@@ -451,7 +396,6 @@ async function completeConfirmation(
   subredditName: string,
   comment: ProcessableComment,
   result: ValidationResult,
-  oldFlairByUsername: Map<string, string | null>,
   language: LanguageSettings,
 ): Promise<ManualApprovalResult> {
   const flairTemplates = await loadFlairTemplates(ctx, subredditName)
@@ -460,9 +404,8 @@ async function completeConfirmation(
     subredditName,
     result.parentAuthor!,
     result.confirmer!,
-    oldFlairByUsername,
   )
-  const commit = await commitConfirmation(ctx, comment, result, participants.parent, participants.confirmer, language.flairCountLabel)
+  const commit = await commitConfirmation(ctx, comment, result, participants.parent, participants.confirmer)
   if (!commit.committed) {
     return {
       approved: false,
@@ -509,7 +452,6 @@ async function commitConfirmation(
   result: ValidationResult,
   parent: ConfirmationParticipant,
   confirmer: ConfirmationParticipant,
-  flairCountLabel: string,
 ): Promise<ConfirmationCommit> {
   if (!result.parentCommentId) return { committed: false }
   const claimKey = `confirmed:${result.parentCommentId}`
@@ -528,9 +470,12 @@ async function commitConfirmation(
     const committed = new Map<string, CommittedConfirmationParticipant>()
     for (const participant of participants) {
       const stored = parseStoredCount(await ctx.redis.get(participant.countKey))
+      const oldCount = stored ?? 0
       committed.set(participant.usernameLower, {
         ...participant,
-        newCount: (stored ?? seedCountFromFlair(participant.oldFlair, flairCountLabel)) + 1,
+        oldCount,
+        newCount: oldCount + 1,
+        oldFlair: null,
         newFlair: null,
       })
     }
@@ -543,7 +488,9 @@ async function commitConfirmation(
       confirmer: result.confirmer ?? '',
       parentAuthor: result.parentAuthor ?? '',
       modApproval: result.isModApproval ?? false,
+      parentPreviousCount: parentCommit.oldCount,
       parentCount: parentCommit.newCount,
+      confirmerPreviousCount: confirmerCommit.oldCount,
       confirmerCount: confirmerCommit.newCount,
       createdAt: new Date().toISOString(),
     }
@@ -583,10 +530,16 @@ function replayCommittedConfirmation(
     const record = JSON.parse(value) as Partial<ConfirmationClaimRecord>
     if (record.commentId !== commentId) return null
     if (typeof record.parentCount !== 'number' || typeof record.confirmerCount !== 'number') return null
+    const parentPreviousCount = typeof record.parentPreviousCount === 'number'
+      ? record.parentPreviousCount
+      : Math.max(0, record.parentCount - 1)
+    const confirmerPreviousCount = typeof record.confirmerPreviousCount === 'number'
+      ? record.confirmerPreviousCount
+      : Math.max(0, record.confirmerCount - 1)
     return {
       committed: true,
-      parent: { ...parent, newCount: record.parentCount, newFlair: null },
-      confirmer: { ...confirmer, newCount: record.confirmerCount, newFlair: null },
+      parent: { ...parent, oldCount: parentPreviousCount, newCount: record.parentCount, oldFlair: null, newFlair: null },
+      confirmer: { ...confirmer, oldCount: confirmerPreviousCount, newCount: record.confirmerCount, oldFlair: null, newFlair: null },
     }
   } catch {
     return null
@@ -602,19 +555,31 @@ async function applyCommittedFlairWithLock(
 ): Promise<CommittedConfirmationParticipant> {
   return withUserFlairLock(ctx, subredditName, participant.username, async () => {
     const storedCount = parseStoredCount(await ctx.redis.get(participant.countKey))
-    const cachedFlair = await getCachedUserFlairRecord(ctx, subredditName, participant.username)
+    const oldFlair = await formatCommittedFlair(
+      ctx,
+      subredditName,
+      participant.oldCount,
+      participant.isModerator,
+      flairTemplates,
+      flairCountLabel,
+    )
     if (storedCount !== null && storedCount > participant.newCount) {
-      const currentFlair = cachedFlair && cachedFlair.count >= storedCount
-        ? cachedFlair.text
-        : await formatCommittedFlair(ctx, subredditName, storedCount, participant.isModerator, flairTemplates, flairCountLabel)
+      const committedNewFlair = await formatCommittedFlair(
+        ctx,
+        subredditName,
+        participant.newCount,
+        participant.isModerator,
+        flairTemplates,
+        flairCountLabel,
+      )
       return {
         ...participant,
-        newCount: storedCount,
-        newFlair: currentFlair,
+        newCount: participant.newCount,
+        oldFlair,
+        newFlair: committedNewFlair,
       }
     }
 
-    const oldFlair = cachedFlair?.text ?? participant.oldFlair
     const tpl = await findCommittedFlairTemplate(ctx, subredditName, participant.newCount, participant.isModerator, flairTemplates)
     if (!tpl) return { ...participant, oldFlair, newFlair: null }
 
@@ -631,7 +596,6 @@ async function applyCommittedFlairWithLock(
     )
     if (!applied) return { ...participant, oldFlair, newFlair: null }
 
-    await cacheUserFlair(ctx, subredditName, participant.username, newFlair, participant.newCount)
     return { ...participant, oldFlair, newFlair }
   })
 }
@@ -659,16 +623,6 @@ async function findCommittedFlairTemplate(
     ?? findFlairTemplate(await refreshFlairTemplateCache(ctx, subredditName), count, isModerator)
 }
 
-function uniqueUsernames(usernames: string[]): string[] {
-  const seen = new Set<string>()
-  return usernames.filter(username => {
-    const key = username.toLowerCase()
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
-}
-
 function uniqueParticipants(participants: ConfirmationParticipant[]): ConfirmationParticipant[] {
   const seen = new Set<string>()
   return participants.filter(participant => {
@@ -682,11 +636,4 @@ function parseStoredCount(value: string | undefined): number | null {
   if (value === undefined) return null
   const parsed = parseInt(value, 10)
   return Number.isFinite(parsed) ? parsed : null
-}
-
-// A user the bot has never counted may still carry a real count in their
-// flair (set before install or by a moderator), so start from that instead
-// of zero when Redis has no record.
-function seedCountFromFlair(oldFlair: string | null, flairCountLabel: string): number {
-  return parseTradeCount(oldFlair, flairCountLabel) ?? 0
 }

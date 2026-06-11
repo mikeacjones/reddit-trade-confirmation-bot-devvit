@@ -100,10 +100,10 @@ function mockMonthlyContext(
 }
 
 function mockConfirmationContext(
-  initial: Record<string, string> = {},
-  options: { setUserFlair?: any; confirmerApiFlair?: string | null } = {},
+  initial: Record<string, string | undefined> = {},
+  options: { setUserFlair?: any } = {},
 ) {
-  const redis = mockRedis({
+  const redisInitial: Record<string, string> = {
     currentMonthlyPost: 't3_post',
     'flairTemplates:plasticmodelexchange:Trades%3A': JSON.stringify([
       { min: 0, max: 99, id: 'tpl-user', template: 'Trades: 0-99', modOnly: false },
@@ -114,8 +114,12 @@ function mockConfirmationContext(
     }),
     'confirmations:seller': '4',
     'confirmations:buyer': '2',
-    ...initial,
-  })
+  }
+  for (const [key, value] of Object.entries(initial)) {
+    if (value === undefined) delete redisInitial[key]
+    else redisInitial[key] = value
+  }
+  const redis = mockRedis(redisInitial)
   const setUserFlair = options.setUserFlair ?? vi.fn(async () => undefined)
   const setUserFlairBatch = vi.fn(async () => [{ ok: true }])
   const submitComment = vi.fn(async () => undefined)
@@ -134,14 +138,12 @@ function mockConfirmationContext(
       getAppUser: vi.fn(async () => ({ id: 't2_bot', username: 'swap-conf-bot' })),
       getCommentById: vi.fn(async (id: string) => {
         if (id === 't1_confirm') {
-          const apiFlair = 'confirmerApiFlair' in options ? options.confirmerApiFlair : 'Trades: 2'
           return {
             id: 't1_confirm',
             parentId: 't1_parent',
             postId: 't3_post',
             subredditName: 'PlasticModelExchange',
             authorName: 'buyer',
-            authorFlair: apiFlair === null ? undefined : { text: apiFlair },
             body: 'confirmed',
             permalink: 'https://reddit.test/r/PlasticModelExchange/comments/post/_/confirm',
             removed: false,
@@ -153,7 +155,6 @@ function mockConfirmationContext(
           postId: 't3_post',
           subredditName: 'PlasticModelExchange',
           authorName: 'seller',
-          authorFlair: { text: 'Trades: 4' },
           body: 'sold to u/buyer',
           permalink: 'https://reddit.test/r/PlasticModelExchange/comments/post/_/parent',
           removed: false,
@@ -267,6 +268,18 @@ describe('adjustUserTradeCount', () => {
       text: 'Trades: 7',
       flairTemplateId: 'tpl-user',
     })
+  })
+
+  it('reports missing Redis count as zero for a manual adjustment', async () => {
+    const { ctx, redis } = mockContext({})
+    redis.store.delete('confirmations:alice')
+
+    const result = await adjustUserTradeCount(ctx, 'Alice', 1)
+
+    expect(result).toEqual(expect.objectContaining({
+      oldFlair: 'Trades: 0',
+      newFlair: 'Trades: 1',
+    }))
   })
 
   it('uses the moderator flair template for cached moderators', async () => {
@@ -473,14 +486,7 @@ describe('onCommentSubmit', () => {
     expect(setUserFlair).toHaveBeenCalledTimes(2)
     expect(submitComment).toHaveBeenCalledOnce()
 
-    expect(JSON.parse(redis.store.get('userFlair:plasticmodelexchange:seller') ?? '{}')).toEqual(expect.objectContaining({
-      count: 5,
-      text: 'Trades: 5',
-    }))
-    expect(JSON.parse(redis.store.get('userFlair:plasticmodelexchange:buyer') ?? '{}')).toEqual(expect.objectContaining({
-      count: 3,
-      text: 'Trades: 3',
-    }))
+    expect([...redis.store.keys()].filter(key => key.startsWith('userFlair:'))).toEqual([])
     expect(redis.store.get('userFlairLock:plasticmodelexchange:seller')).toBeUndefined()
     expect(redis.store.get('userFlairLock:plasticmodelexchange:buyer')).toBeUndefined()
 
@@ -492,6 +498,27 @@ describe('onCommentSubmit', () => {
       .toBeLessThan(callOrder(setUserFlair, options => options.username === 'buyer'))
     expect(callOrder(setUserFlair, options => options.username === 'buyer'))
       .toBeLessThan(callOrder(redis.api.del, key => key === 'userFlairLock:plasticmodelexchange:buyer'))
+  })
+
+  it('renders missing Redis counts as zero before the first confirmation increment', async () => {
+    const { ctx, event, redis, submitComment } = mockConfirmationContext({
+      'confirmations:seller': undefined,
+      'confirmations:buyer': undefined,
+    })
+
+    await onCommentSubmit(event, ctx)
+
+    expect(redis.store.get('confirmations:seller')).toBe('1')
+    expect(redis.store.get('confirmations:buyer')).toBe('1')
+    expect(submitComment).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining('[`u/buyer`](https://reddit.com/u/buyer) updated from `Trades: 0` to `Trades: 1`'),
+    }))
+    expect(submitComment).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining('[`u/seller`](https://reddit.com/u/seller) updated from `Trades: 0` to `Trades: 1`'),
+    }))
+    expect(submitComment).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.not.stringContaining('unknown'),
+    }))
   })
 
   it('does not change counts when the parent claim already exists', async () => {
@@ -515,63 +542,15 @@ describe('onCommentSubmit', () => {
     expect(setUserFlair).not.toHaveBeenCalled()
   })
 
-  it('reports the confirmer\'s actual old flair from the API, not the template text in the event payload', async () => {
-    const { ctx, event, submitComment } = mockConfirmationContext()
-
-    await onCommentSubmit(event, ctx)
-
-    expect(submitComment).toHaveBeenCalledWith(expect.objectContaining({
-      text: expect.stringContaining('[`u/buyer`](https://reddit.com/u/buyer) updated from `Trades: 2` to `Trades: 3`'),
-    }))
-  })
-
-  it('seeds a missing Redis count from the user\'s current flair instead of restarting at 1', async () => {
-    const { ctx, event, redis, submitComment } = mockConfirmationContext()
-    redis.store.delete('confirmations:buyer')
-
-    await onCommentSubmit(event, ctx)
-
-    expect(redis.store.get('confirmations:buyer')).toBe('3')
-    expect(submitComment).toHaveBeenCalledWith(expect.objectContaining({
-      text: expect.stringContaining('[`u/buyer`](https://reddit.com/u/buyer) updated from `Trades: 2` to `Trades: 3`'),
-    }))
-  })
-
-  it('does not seed a count from flair-template range text', async () => {
-    const { ctx, event, redis } = mockConfirmationContext({}, { confirmerApiFlair: 'Trades: 0-99' })
-    redis.store.delete('confirmations:buyer')
-
-    await onCommentSubmit(event, ctx)
-
-    expect(redis.store.get('confirmations:buyer')).toBe('1')
-  })
-
-  it('treats a user with no flair as having no previous count', async () => {
-    const { ctx, event, redis } = mockConfirmationContext({}, { confirmerApiFlair: null })
-    redis.store.delete('confirmations:buyer')
-
-    await onCommentSubmit(event, ctx)
-
-    expect(redis.store.get('confirmations:buyer')).toBe('1')
-  })
-
-  it('uses the cached user flair as old flair when Reddit payload flair is stale', async () => {
+  it('uses the Redis count as old flair when Reddit payload flair is stale', async () => {
     const { ctx, event, redis, submitComment } = mockConfirmationContext({
       'confirmations:buyer': '3',
-      'userFlair:plasticmodelexchange:buyer': JSON.stringify({
-        text: 'Trades: 3',
-        count: 3,
-        setAt: '2026-05-08T00:00:00.000Z',
-      }),
     })
 
     await onCommentSubmit(event, ctx)
 
     expect(redis.store.get('confirmations:buyer')).toBe('4')
-    expect(JSON.parse(redis.store.get('userFlair:plasticmodelexchange:buyer') ?? '{}')).toEqual(expect.objectContaining({
-      count: 4,
-      text: 'Trades: 4',
-    }))
+    expect([...redis.store.keys()].filter(key => key.startsWith('userFlair:'))).toEqual([])
     expect(submitComment).toHaveBeenCalledWith(expect.objectContaining({
       text: expect.stringContaining('[`u/buyer`](https://reddit.com/u/buyer) updated from `Trades: 3` to `Trades: 4`'),
     }))
@@ -582,14 +561,9 @@ describe('onCommentSubmit', () => {
     const setUserFlair = vi.fn(async (options: { username: string }) => {
       if (options.username === 'seller') {
         await ctxRef.redis.set('confirmations:buyer', '4')
-        await ctxRef.redis.set('userFlair:plasticmodelexchange:buyer', JSON.stringify({
-          text: 'Trades: 4',
-          count: 4,
-          setAt: '2026-05-08T00:00:00.000Z',
-        }))
       }
     })
-    const { ctx, event } = mockConfirmationContext({}, { setUserFlair })
+    const { ctx, event, submitComment } = mockConfirmationContext({}, { setUserFlair })
     ctxRef = ctx
 
     await onCommentSubmit(event, ctx)
@@ -601,6 +575,12 @@ describe('onCommentSubmit', () => {
     expect(setUserFlair).not.toHaveBeenCalledWith(expect.objectContaining({
       username: 'buyer',
       text: 'Trades: 3',
+    }))
+    expect(submitComment).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining('[`u/buyer`](https://reddit.com/u/buyer) updated from `Trades: 2` to `Trades: 3`'),
+    }))
+    expect(submitComment).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.not.stringContaining('[`u/buyer`](https://reddit.com/u/buyer) updated from `Trades: 2` to `Trades: 4`'),
     }))
   })
 })

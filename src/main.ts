@@ -57,16 +57,25 @@ Devvit.addSettings([
   },
 ])
 
-const adjustTradeCountForm = Devvit.createForm({
+interface AdjustTradeCountFormData {
+  username?: string
+  count?: number
+  commentAuthor?: boolean
+}
+
+const adjustTradeCountForm = Devvit.createForm((data: AdjustTradeCountFormData = {}) => ({
   title: 'Set user trade count',
   acceptLabel: 'Set count',
   fields: [
     {
       type: 'string',
       name: 'username',
-      label: 'Username',
-      helpText: 'Enter the Reddit username with or without u/.',
+      label: data.commentAuthor ? 'Comment author' : 'Username',
+      helpText: data.commentAuthor
+        ? 'Defaults to the selected comment author.'
+        : 'Enter the Reddit username with or without u/.',
       required: true,
+      defaultValue: data.username ?? '',
     },
     {
       type: 'number',
@@ -74,10 +83,10 @@ const adjustTradeCountForm = Devvit.createForm({
       label: 'Trade count',
       helpText: 'Must be zero or greater.',
       required: true,
-      defaultValue: 0,
+      defaultValue: data.count ?? 0,
     },
   ],
-}, async (event, ctx) => {
+}), async (event, ctx) => {
   try {
     const result = await adjustUserTradeCount(
       ctx,
@@ -149,6 +158,40 @@ Devvit.addMenuItem({
 })
 
 Devvit.addMenuItem({
+  label: "Adjust comment author's flair",
+  location: 'comment',
+  forUserType: 'moderator',
+  onPress: async (event, ctx) => {
+    try {
+      if (!event.targetId.startsWith('t1_')) {
+        ctx.ui.showToast('Select a comment to set the author trade count')
+        return
+      }
+
+      const comment = await redditApiCall(
+        ctx,
+        () => ctx.reddit.getCommentById(event.targetId as `t1_${string}`),
+        `get comment ${event.targetId}`,
+      )
+      if (!comment.authorName) {
+        ctx.ui.showToast('Selected comment has no processable author')
+        return
+      }
+
+      const stored = await ctx.redis.get(`confirmations:${comment.authorName.toLowerCase()}`)
+      ctx.ui.showForm(adjustTradeCountForm, {
+        username: comment.authorName,
+        count: parseStoredCount(stored) ?? 0,
+        commentAuthor: true,
+      })
+    } catch (error) {
+      console.warn(`Failed to open trade count form: ${error instanceof Error ? error.message : String(error)}`)
+      ctx.ui.showToast(error instanceof Error ? error.message : 'Failed to open trade count form')
+    }
+  },
+})
+
+Devvit.addMenuItem({
   label: 'Import existing flair counts',
   location: 'subreddit',
   forUserType: 'moderator',
@@ -188,6 +231,12 @@ function pickTextColor(hex: string): 'light' | 'dark' {
   const g = parseInt(hex.slice(3, 5), 16)
   const b = parseInt(hex.slice(5, 7), 16)
   return (r * 299 + g * 587 + b * 114) / 1000 > 128 ? 'dark' : 'light'
+}
+
+function parseStoredCount(value: string | undefined): number | null {
+  if (value === undefined) return null
+  const parsed = parseInt(value, 10)
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 Devvit.addMenuItem({

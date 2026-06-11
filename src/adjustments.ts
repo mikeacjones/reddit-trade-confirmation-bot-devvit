@@ -7,7 +7,7 @@ import { setUserFlairWithFallback } from './flairAssignment.js'
 import { getLanguageSettings } from './language.js'
 import { isUserModerator } from './moderators.js'
 import { redditApiCall, type RedditApiContext } from './redditApi.js'
-import { cacheUserFlair, getCachedUserFlair, withUserFlairLock } from './userFlairState.js'
+import { withUserFlairLock } from './userFlairState.js'
 
 const REDDIT_USERNAME_PATTERN = /^[A-Za-z0-9_-]{3,20}$/
 
@@ -38,11 +38,11 @@ export async function adjustUserTradeCount(
   const countKey = `confirmations:${username.toLowerCase()}`
   const previousCount = await ctx.redis.get(countKey)
   const previousStoredCount = parseStoredCount(previousCount)
-  const oldTpl = previousStoredCount === null ? null : findFlairTemplate(flairTemplates, previousStoredCount, isMod)
-  const cachedOldFlair = await getCachedUserFlair(ctx, subredditName, username)
-  const oldFlair = cachedOldFlair ?? (oldTpl && previousStoredCount !== null
-    ? formatFlairFromTemplate(oldTpl.template, previousStoredCount, flairCountLabel)
-    : null)
+  const oldCount = previousStoredCount ?? 0
+  const oldTpl = findFlairTemplate(flairTemplates, oldCount, isMod)
+  const oldFlair = oldTpl
+    ? formatFlairFromTemplate(oldTpl.template, oldCount, flairCountLabel)
+    : null
   await ctx.redis.set(countKey, String(count))
 
   try {
@@ -52,7 +52,6 @@ export async function adjustUserTradeCount(
         { subredditName, username, text: newFlair, flairTemplateId: tpl.id },
         `set manual flair for u/${username}`,
       )
-      await cacheUserFlair(ctx, subredditName, username, newFlair, count)
     })
   } catch (error) {
     if (previousCount === undefined) await ctx.redis.del(countKey)
