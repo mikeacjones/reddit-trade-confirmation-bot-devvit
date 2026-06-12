@@ -178,7 +178,7 @@ sequenceDiagram
         Worker->>Redis: Mark confirmerFlair superseded
       end
 
-      Worker->>RedditAPI: Check bot replies for deterministic marker
+      Worker->>RedditAPI: Check whether bot already replied
       alt matching reply already exists
         Worker->>Redis: Mark reply posted
       else no matching reply
@@ -269,8 +269,7 @@ This is not deterministic Temporal replay. It is persisted step completion plus 
 ### Reply Effect
 
 - Reply text is rendered from immutable committed transition fields.
-- The reply must include or derive a deterministic marker tied to `confirmed:<parentCommentId>` or `workId`.
-- Before submitting, fetch replies to the target comment and check for the bot marker.
+- Before submitting, fetch replies to the target comment and check for any reply authored by the bot user.
 - If found, mark posted.
 - If not found, submit and mark posted.
 
@@ -300,7 +299,7 @@ Implemented policy:
 4. Convert `CommentSubmit` and rescan to enqueue-only paths.
 5. Move confirmation validation and count commit into the worker.
 6. Add durable effect tracking for flair writes and replies.
-7. Add reply dedupe by deterministic marker.
+7. Add reply dedupe by bot-authored replies on the target comment.
 8. Add missing-user pull-in workflow according to the chosen policy.
 9. Convert manual approval into queued work.
 10. Add admin visibility:
@@ -312,10 +311,10 @@ Implemented policy:
 ## Implementation Decisions
 
 1. Missing-user pull-in happens automatically during confirmation processing.
-2. Successful replies use the visible marker `Confirmation ID: <parentCommentId>`.
+2. Successful and rejection replies do not include internal idempotency markers; recovery dedupes by finding an existing reply from the bot account on the target comment.
 3. The worker uses a two-second recurring schedule plus debounced near-term nudges from enqueue paths; rescan runs hourly.
 4. Repeated failure dead-letters work into `work:failed`; moderators can view queue status and retry failed work from menu actions.
 5. Manual trade-count adjustments remain direct moderator actions because they are explicit corrections, but they still update Redis before writing flair.
-6. Already-confirmed, self-confirmation, and old-thread replies use persisted rejection records and deterministic markers.
+6. Already-confirmed, self-confirmation, and old-thread replies use persisted rejection records and bot-author dedupe.
 7. Terminal work keeps only compact idempotency markers. Full work items, rich confirmation effect state, and rejection records are temporary recovery state and are cleaned up after successful terminal completion.
 8. Bulk flair import is intentionally omitted. Missing Redis counts are handled only by the per-user fallback pull-in path.

@@ -333,7 +333,7 @@ describe('processConfirmationWork', () => {
     expect(result).toEqual({ pollerAcquired: true, processed: 1 })
     expect(ctx.reddit.submitComment).toHaveBeenCalledWith({
       id: 't1_comment',
-      text: expect.stringContaining('Rejection ID: t1_comment'),
+      text: expect.stringContaining('own trade'),
     })
     expect(store.get('rejected:t1_comment')).toBeUndefined()
     expect(JSON.parse(store.get(processedWorkKey(workId)) ?? '{}')).toEqual(expect.objectContaining({

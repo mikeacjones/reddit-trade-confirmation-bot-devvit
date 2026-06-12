@@ -124,13 +124,13 @@ describe('processConfirmationItem', () => {
     }))
   })
 
-  it('does not duplicate the confirmation reply when recovery finds the bot marker', async () => {
+  it('does not duplicate the confirmation reply when recovery finds an existing bot reply', async () => {
     const { ctx, reddit } = mockContext()
     reddit.getComments.mockResolvedValueOnce([
       {
         id: 't1_existing_reply',
         authorName: 'swap-conf-bot',
-        body: 'already posted\n\nConfirmation ID: t1_parent',
+        body: 'already posted',
       },
     ])
 
@@ -184,7 +184,7 @@ describe('processConfirmationItem', () => {
     expect(reddit.setUserFlair).not.toHaveBeenCalled()
     expect(reddit.submitComment).toHaveBeenCalledWith({
       id: 't1_confirm',
-      text: expect.stringContaining('Rejection ID: t1_confirm'),
+      text: expect.stringContaining('own trade'),
     })
     expect(JSON.parse(store.get('rejected:t1_confirm') ?? '{}')).toEqual(expect.objectContaining({
       commentId: 't1_confirm',

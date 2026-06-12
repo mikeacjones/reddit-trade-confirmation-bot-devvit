@@ -101,11 +101,7 @@ describe('applyReplyEffect', () => {
 
     expect(ctx.reddit.submitComment).toHaveBeenCalledWith({
       id: 't1_confirm',
-      text: [
-        'buyer: Deals: 2 -> Deals: 3',
-        '',
-        'Confirmation ID: t1_parent',
-      ].join('\n'),
+      text: 'buyer: Deals: 2 -> Deals: 3',
     })
   })
 
@@ -150,7 +146,7 @@ describe('applyReplyEffect', () => {
     }))
   })
 
-  it('marks posted without submitting when a bot reply already has the marker', async () => {
+  it('marks posted without submitting when the bot already replied to the target comment', async () => {
     const record = claim()
     const store = new Map<string, string>([
       ['confirmed:t1_parent', JSON.stringify(record)],
@@ -168,7 +164,7 @@ describe('applyReplyEffect', () => {
           {
             id: 't1_existing_reply',
             authorName: 'swap-conf-bot',
-            body: 'Done\n\nConfirmation ID: t1_parent',
+            body: 'Done',
           },
         ]),
         submitComment: vi.fn(async () => ({ id: 't1_bot_reply' })),
@@ -191,7 +187,7 @@ describe('applyReplyEffect', () => {
     expect(ctx.reddit.submitComment).not.toHaveBeenCalled()
   })
 
-  it('uses the marker for dedupe even when the bot username is unavailable', async () => {
+  it('submits when the bot username is unavailable because ownership cannot be proven', async () => {
     const record = claim()
     const store = new Map<string, string>([
       ['confirmed:t1_parent', JSON.stringify(record)],
@@ -208,7 +204,8 @@ describe('applyReplyEffect', () => {
         getComments: vi.fn(async () => [
           {
             id: 't1_existing_reply',
-            body: 'Done\n\nConfirmation ID: t1_parent',
+            authorName: 'swap-conf-bot',
+            body: 'Done',
           },
         ]),
         submitComment: vi.fn(async () => ({ id: 't1_bot_reply' })),
@@ -220,9 +217,13 @@ describe('applyReplyEffect', () => {
     expect(result).toEqual({
       status: 'posted',
       at: '2026-06-11T12:00:00.000Z',
-      replyId: 't1_existing_reply',
+      replyId: 't1_bot_reply',
     })
-    expect(ctx.reddit.submitComment).not.toHaveBeenCalled()
+    expect(ctx.reddit.getComments).not.toHaveBeenCalled()
+    expect(ctx.reddit.submitComment).toHaveBeenCalledWith({
+      id: 't1_confirm',
+      text: renderConfirmationReply(record),
+    })
   })
 
   it('returns without reading or submitting when the reply effect is already posted', async () => {
@@ -334,11 +335,7 @@ describe('applyReplyEffect', () => {
 
     expect(ctx.reddit.submitComment).toHaveBeenCalledWith({
       id: 't1_confirm',
-      text: [
-        'Use the new monthly thread.',
-        '',
-        'Rejection ID: t1_confirm',
-      ].join('\n'),
+      text: 'Use the new monthly thread.',
     })
   })
 
@@ -374,11 +371,7 @@ describe('applyReplyEffect', () => {
 
     expect(ctx.reddit.submitComment).toHaveBeenCalledWith({
       id: 't1_confirm',
-      text: [
-        'u/seller must mention u/buyer.',
-        '',
-        'Rejection ID: t1_confirm',
-      ].join('\n'),
+      text: 'u/seller must mention u/buyer.',
     })
   })
 })

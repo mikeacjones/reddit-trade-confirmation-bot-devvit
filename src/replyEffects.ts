@@ -70,7 +70,6 @@ export async function applyReplyEffect(
     ctx,
     record.postId,
     record.replyToCommentId,
-    confirmationReplyMarker(record),
     options.botUsername,
   )
   if (existingReplyId) {
@@ -109,7 +108,6 @@ export async function applyRejectionReplyEffect(
     ctx,
     record.postId,
     record.replyToCommentId,
-    rejectionReplyMarker(record),
     options.botUsername,
   )
   const effect: EffectState = {
@@ -128,17 +126,16 @@ async function findExistingReplyId(
   ctx: ReplyEffectContext,
   postId: string,
   commentId: string,
-  marker: string,
   botUsername: string | undefined,
 ): Promise<string | null> {
   if (!ctx.reddit.getComments) return null
+  if (!botUsername) return null
   const replies = await readReplyComments(ctx.reddit.getComments({
     postId,
     commentId,
   }))
   const existing = replies.find(reply =>
-    reply.body?.includes(marker) &&
-    (!botUsername || reply.authorName?.toLowerCase() === botUsername.toLowerCase()))
+    reply.authorName?.toLowerCase() === botUsername.toLowerCase())
   return existing?.id ?? null
 }
 
@@ -151,7 +148,7 @@ export function renderConfirmationReply(
   record: ConfirmationClaimRecord,
   settings: AppSettings = DEFAULT_APP_SETTINGS,
 ): string {
-  return withMarker(renderTemplate(settings.tradeConfirmation, {
+  return renderTemplate(settings.tradeConfirmation, {
     confirmer: record.confirmer,
     parent_author: record.parentAuthor,
     old_comment_flair: tradeFlairText(record.confirmerPreviousCount, settings.flairCountLabel),
@@ -159,11 +156,7 @@ export function renderConfirmationReply(
     old_parent_flair: tradeFlairText(record.parentPreviousCount, settings.flairCountLabel),
     new_parent_flair: tradeFlairText(record.parentCount, settings.flairCountLabel),
     confirmation_id: record.parentCommentId,
-  }), confirmationReplyMarker(record))
-}
-
-export function confirmationReplyMarker(record: ConfirmationClaimRecord): string {
-  return `Confirmation ID: ${record.parentCommentId}`
+  })
 }
 
 export function shouldReplyToRejection(reason: ConfirmationRejectionReason): boolean {
@@ -174,14 +167,10 @@ function renderRejectionReply(
   record: RejectionReplyRecord,
   settings: AppSettings = DEFAULT_APP_SETTINGS,
 ): string {
-  return withMarker(renderTemplate(rejectionTemplate(record.reason, settings), {
+  return renderTemplate(rejectionTemplate(record.reason, settings), {
     author_name: record.authorName,
     parent_author: record.parentAuthor,
-  }), rejectionReplyMarker(record))
-}
-
-function rejectionReplyMarker(record: RejectionReplyRecord): string {
-  return `Rejection ID: ${record.commentId}`
+  })
 }
 
 async function getOrCreateRejectionRecord(
@@ -259,8 +248,4 @@ function parseRejectionRecord(value: string | undefined): RejectionReplyRecord |
   } catch {
     return null
   }
-}
-
-function withMarker(body: string, marker: string): string {
-  return body.includes(marker) ? body : [body.trimEnd(), '', marker].join('\n')
 }
