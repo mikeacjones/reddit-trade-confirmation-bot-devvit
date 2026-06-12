@@ -1,0 +1,29 @@
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      # vitest and @vitest/coverage-v8 share peer-dep majors and must bump in lockstep.
+      vitest:
+        patterns:
+          - "vitest"
+          - "@vitest/*"
+      # @devvit/* packages are released together and share API contracts.
+      devvit:
+        patterns:
+          - "@devvit/*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"

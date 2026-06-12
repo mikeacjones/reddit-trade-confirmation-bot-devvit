@@ -5,14 +5,16 @@
   "private": true,
   "scripts": {
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "coverage:badge": "node scripts/update-coverage-badge.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@devvit/public-api": "0.13.3"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "^4.1.7",
     "typescript": "^5.9.3",
     "vitest": "^4.1.7"
   }
 }
-
