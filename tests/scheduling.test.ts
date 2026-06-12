@@ -1,42 +1,54 @@
 import { describe, expect, it, vi } from 'vitest'
-import { ensureJobsScheduled } from '../src/scheduling'
+import {
+  ensureWorkerScheduled,
+  PROCESS_CONFIRMATION_WORK_CRON,
+} from '../src/scheduling.js'
+import { MONTHLY_POST_CRON, MONTHLY_POST_JOB } from '../src/monthly.js'
+import {
+  RESCAN_CONFIRMATION_COMMENTS_CRON,
+  RESCAN_CONFIRMATION_COMMENTS_JOB,
+} from '../src/rescan.js'
+import { PROCESS_CONFIRMATION_WORK_JOB } from '../src/workQueue.js'
 
 function mockContext(existingJobs: Array<{ name: string }> = []) {
-  const runJob = vi.fn(async () => 'job-id')
   const listJobs = vi.fn(async () => existingJobs)
-  return { ctx: { scheduler: { runJob, listJobs } } as any, runJob, listJobs }
+  const runJob = vi.fn(async () => 'job-id')
+  return { ctx: { scheduler: { listJobs, runJob } }, listJobs, runJob }
 }
 
-describe('ensureJobsScheduled', () => {
-  it('schedules the monthly post and hourly rescan when nothing is scheduled', async () => {
+describe('ensureWorkerScheduled', () => {
+  it('schedules recurring worker, monthly post, and rescan jobs when missing', async () => {
     const { ctx, runJob } = mockContext()
 
-    const added = await ensureJobsScheduled(ctx)
-
-    expect(added).toEqual(['monthly-post', 'rescan-monthly-post'])
-    expect(runJob).toHaveBeenCalledWith({ name: 'monthly-post', cron: '0 0 1 * *' })
-    expect(runJob).toHaveBeenCalledWith({ name: 'rescan-monthly-post', cron: '30 * * * *' })
-  })
-
-  it('does not duplicate jobs that are already scheduled', async () => {
-    const { ctx, runJob } = mockContext([
-      { name: 'monthly-post' },
-      { name: 'rescan-monthly-post' },
+    await expect(ensureWorkerScheduled(ctx)).resolves.toEqual([
+      PROCESS_CONFIRMATION_WORK_JOB,
+      MONTHLY_POST_JOB,
+      RESCAN_CONFIRMATION_COMMENTS_JOB,
     ])
 
-    const added = await ensureJobsScheduled(ctx)
-
-    expect(added).toEqual([])
-    expect(runJob).not.toHaveBeenCalled()
+    expect(runJob).toHaveBeenCalledWith({
+      name: PROCESS_CONFIRMATION_WORK_JOB,
+      cron: PROCESS_CONFIRMATION_WORK_CRON,
+    })
+    expect(runJob).toHaveBeenCalledWith({
+      name: MONTHLY_POST_JOB,
+      cron: MONTHLY_POST_CRON,
+    })
+    expect(runJob).toHaveBeenCalledWith({
+      name: RESCAN_CONFIRMATION_COMMENTS_JOB,
+      cron: RESCAN_CONFIRMATION_COMMENTS_CRON,
+    })
   })
 
-  it('adds only the missing job on an existing install', async () => {
-    const { ctx, runJob } = mockContext([{ name: 'monthly-post' }])
+  it('does not schedule duplicate recurring jobs', async () => {
+    const { ctx, runJob } = mockContext([
+      { name: PROCESS_CONFIRMATION_WORK_JOB },
+      { name: MONTHLY_POST_JOB },
+      { name: RESCAN_CONFIRMATION_COMMENTS_JOB },
+    ])
 
-    const added = await ensureJobsScheduled(ctx)
+    await expect(ensureWorkerScheduled(ctx)).resolves.toEqual([])
 
-    expect(added).toEqual(['rescan-monthly-post'])
-    expect(runJob).toHaveBeenCalledOnce()
-    expect(runJob).toHaveBeenCalledWith({ name: 'rescan-monthly-post', cron: '30 * * * *' })
+    expect(runJob).not.toHaveBeenCalled()
   })
 })

@@ -1,6 +1,4 @@
 node_modules/
-.devvit/
 coverage/
 dist/
-*.log
-.DS_Store
+

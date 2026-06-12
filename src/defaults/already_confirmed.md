@@ -1,1 +1,0 @@
-This trade has already been confirmed. If you believe this to be in error, please contact the moderators.
