@@ -24,7 +24,13 @@ work:ready
   Sorted set. member = workId, score = nextAttemptAt epoch millis.
 
 work:item:<workId>
-  JSON work item with event metadata, status, attempts, nextAttemptAt, and lastError.
+  Temporary JSON work item with event metadata, status, attempts, nextAttemptAt, and lastError.
+  Deleted after terminal completion.
+
+work:processed:<workId>
+  Persistent terminal marker for a processed comment work item. This is the durable
+  idempotency flag used by event and rescan enqueue paths after work:item:<workId>
+  has been cleaned up.
 
 work:poller:lease
   Short TTL global worker lease. Prevents overlapping pollers from doing substantial work.
@@ -33,7 +39,13 @@ work:lease:<workId>
   Short TTL item lease. Prevents concurrent processing of the same work item.
 
 confirmed:<parentCommentId>
-  Canonical confirmation claim and immutable count transition record.
+  Canonical confirmation claim. During processing this is the rich immutable count
+  transition and effect recovery record. After all terminal effects complete, it is
+  compacted to a small confirmed marker that still prevents double-counting.
+
+rejected:<commentId>
+  Temporary rejection reply recovery record. Deleted after the rejection reaches a
+  terminal processed state.
 
 confirmations:<usernameLower>
   Authoritative trade count for the user.
@@ -55,7 +67,7 @@ interface ConfirmationWorkItem {
   postId: string
   subredditName: string
   enqueuedAt: string
-  status: 'queued' | 'running' | 'complete' | 'failed'
+  status: 'queued' | 'failed'
   attempts: number
   nextAttemptAt: number
   lastError?: string
@@ -63,6 +75,10 @@ interface ConfirmationWorkItem {
 ```
 
 The work item stores immutable event facts only. It must not store pre-read user counts from enqueue time because queue latency could make them stale before processing.
+
+Items remain `queued` while leased. `work:lease:<workId>` is the running marker; this keeps recovery simple because abandoned work can resume after the lease expires without repairing a stuck `running` status.
+
+When work reaches a terminal state, the worker writes `work:processed:<workId>` and then deletes `work:item:<workId>` and `work:lease:<workId>`. The processed marker persists; the full queue item does not.
 
 ## Confirmation Claim Shape
 
@@ -100,6 +116,8 @@ type EffectState =
 ```
 
 `parentPreviousCount`, `parentCount`, `confirmerPreviousCount`, and `confirmerCount` are immutable after the Redis transaction commits. Reply rendering must use these values, not the current Redis count at recovery time.
+
+The rich claim record is only required until both flair writes and the reply effect are terminal. After the worker writes the persistent processed marker for the triggering comment, `confirmed:<parentCommentId>` is compacted to a small marker containing the winning confirmation comment id, parent comment id, subreddit, post id, and confirmed timestamp.
 
 ## Sequence Diagram
 
@@ -260,12 +278,12 @@ This is not deterministic Temporal replay. It is persisted step completion plus 
 
 This is the only permitted Reddit flair read.
 
-Open policy to confirm:
+Implemented policy:
 
-- Automatic: if a confirmation participant has no `confirmations:<user>` key, the worker reads that user's current flair once, writes the parsed count into Redis with `NX`, and then commits the confirmation from that count.
-- Manual/import only: normal confirmation processing treats missing Redis as `0`; mods can run import or a user-specific pull-in action separately.
-
-In either policy, Reddit flair text is never used after the Redis count exists.
+- Automatic pull-in: if a confirmation participant has no `confirmations:<user>` key, the worker reads that user's current flair once, writes the parsed count into Redis with `NX`, and then commits the confirmation from that count.
+- If there is no parseable flair count, the missing Redis count is treated as `0`.
+- Reddit flair text is never used after the Redis count exists.
+- There is no bulk flair import path. Bulk import can race with a still-running legacy bot and corrupt Redis source-of-truth assumptions. Existing users are pulled in one at a time only when they first participate in a processed confirmation.
 
 ## Implementation Phases
 
@@ -291,11 +309,13 @@ In either policy, Reddit flair text is never used after the Redis count exists.
     - dead-letter after repeated failure
 11. Remove old direct-processing paths once tests cover the new workflow.
 
-## Open Questions
+## Implementation Decisions
 
-1. Should missing-user pull-in happen automatically during confirmation processing, or only via manual/import action?
-2. What reply marker is acceptable? A visible `Confirmation ID: ...` line is reliable; hidden HTML comments may be stripped by Reddit.
-3. Is a two-second cron acceptable in production for this app, or should we combine a slower cron sweeper with one-off `runAt` nudges?
-4. After repeated failure, should work dead-letter silently, notify mods by modmail, or expose only a moderator menu action?
-5. Should manual trade-count adjustments also go through the queue, or can they remain direct because they are explicitly moderator initiated?
-6. Should already-confirmed rejection replies also be durable/deduped, or is that only required for successful confirmation replies?
+1. Missing-user pull-in happens automatically during confirmation processing.
+2. Successful replies use the visible marker `Confirmation ID: <parentCommentId>`.
+3. The worker uses a two-second recurring schedule plus debounced near-term nudges from enqueue paths; rescan runs hourly.
+4. Repeated failure dead-letters work into `work:failed`; moderators can view queue status and retry failed work from menu actions.
+5. Manual trade-count adjustments remain direct moderator actions because they are explicit corrections, but they still update Redis before writing flair.
+6. Already-confirmed, self-confirmation, and old-thread replies use persisted rejection records and deterministic markers.
+7. Terminal work keeps only compact idempotency markers. Full work items, rich confirmation effect state, and rejection records are temporary recovery state and are cleaned up after successful terminal completion.
+8. Bulk flair import is intentionally omitted. Missing Redis counts are handled only by the per-user fallback pull-in path.

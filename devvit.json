@@ -1,0 +1,28 @@
+{
+  "$schema": "https://developers.reddit.com/schema/config-file.v1.json",
+  "name": "swap-bot",
+  "permissions": {
+    "redis": true,
+    "reddit": {
+      "enable": true,
+      "scope": "moderator"
+    }
+  },
+  "blocks": {
+    "entry": "src/main.ts",
+    "forms": {
+      "enable": true
+    },
+    "menu": {
+      "enable": true
+    },
+    "settings": {
+      "enable": true
+    },
+    "triggers": [
+      "onAppInstall",
+      "onAppUpgrade",
+      "onCommentSubmit"
+    ]
+  }
+}
