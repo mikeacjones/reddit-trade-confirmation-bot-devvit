@@ -11,7 +11,7 @@
     "build": "devvit upload --dry-run"
   },
   "dependencies": {
-    "@devvit/public-api": "0.13.3"
+    "@devvit/public-api": "0.13.4"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^4.1.7",
