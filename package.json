@@ -1,0 +1,23 @@
+{
+  "name": "swap-bot",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "coverage:badge": "node scripts/update-coverage-badge.mjs",
+    "test:watch": "vitest",
+    "build": "devvit upload --dry-run"
+  },
+  "dependencies": {
+    "@devvit/public-api": "0.14.6"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^4.1.9",
+    "devvit": "0.14.6",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.7"
+  },
+  "license": "BSD-3-Clause"
+}
