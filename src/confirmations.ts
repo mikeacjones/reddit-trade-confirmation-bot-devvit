@@ -66,6 +66,7 @@ interface CommittedConfirmationParticipant extends ConfirmationParticipant {
 type ConfirmationCommit =
   | {
     committed: true
+    replayed: boolean
     parent: CommittedConfirmationParticipant
     confirmer: CommittedConfirmationParticipant
   }
@@ -279,6 +280,7 @@ export async function approveConfirmationFromComment(
     postId: target.postId,
     permalink: target.permalink,
   }, result, language)
+  await ctx.redis.set(`processed:${target.id}`, '1', { expiration: expirationFromNow(PROCESSED_COMMENT_TTL_MS) })
 
   if (!completion.approved) {
     return {
@@ -442,16 +444,20 @@ async function completeConfirmation(
   const confirmerResult = await applyCommittedFlairWithLock(ctx, subredditName, commit.confirmer, flairTemplates, language.flairCountLabel)
 
   const replyTo = result.replyToCommentId ?? comment.id
-  const replyBody = render(await getTemplate(ctx, 'trade_confirmation'), {
-    comment_id: replyTo,
-    confirmer: result.confirmer ?? '',
-    parent_author: result.parentAuthor ?? '',
-    old_comment_flair: confirmerResult.oldFlair ?? 'unknown',
-    new_comment_flair: confirmerResult.newFlair ?? 'unknown',
-    old_parent_flair: parentResult.oldFlair ?? 'unknown',
-    new_parent_flair: parentResult.newFlair ?? 'unknown',
-  })
-  await trySubmitCommentWithRetry(ctx, replyTo, replyBody)
+  if (commit.replayed && await botHasReplied(ctx, replyTo)) {
+    console.debug(`Skipping reply to ${replyTo}: confirmation ${result.parentCommentId} was already answered`)
+  } else {
+    const replyBody = render(await getTemplate(ctx, 'trade_confirmation'), {
+      comment_id: replyTo,
+      confirmer: result.confirmer ?? '',
+      parent_author: result.parentAuthor ?? '',
+      old_comment_flair: confirmerResult.oldFlair ?? 'unknown',
+      new_comment_flair: confirmerResult.newFlair ?? 'unknown',
+      old_parent_flair: parentResult.oldFlair ?? 'unknown',
+      new_parent_flair: parentResult.newFlair ?? 'unknown',
+    })
+    await trySubmitCommentWithRetry(ctx, replyTo, replyBody)
+  }
   console.debug(
     `Confirmed ${result.parentCommentId}: u/${result.parentAuthor} ${parentResult.oldFlair ?? 'none'} -> ` +
     `${parentResult.newFlair ?? 'unchanged'}, u/${result.confirmer} ${confirmerResult.oldFlair ?? 'none'} -> ` +
@@ -465,6 +471,17 @@ async function completeConfirmation(
     confirmer: result.confirmer,
     parentCommentId: result.parentCommentId,
   }
+}
+
+async function botHasReplied(ctx: TriggerContext, commentId: string): Promise<boolean> {
+  const botUser = await redditApiCall(ctx, () => ctx.reddit.getAppUser(), 'get app user')
+  if (!botUser) return false
+  const replies = await redditApiCall(
+    ctx,
+    async () => (await ctx.reddit.getCommentById(commentId as `t1_${string}`)).replies.all(),
+    `get replies for ${commentId}`,
+  )
+  return replies.some(reply => reply.authorName.toLowerCase() === botUser.username.toLowerCase())
 }
 
 async function commitConfirmation(
@@ -530,6 +547,7 @@ async function commitConfirmation(
       )
       return {
         committed: true,
+        replayed: false,
         parent: parentCommit,
         confirmer: confirmerCommit,
       }
@@ -559,6 +577,7 @@ function replayCommittedConfirmation(
       : Math.max(0, record.confirmerCount - 1)
     return {
       committed: true,
+      replayed: true,
       parent: { ...parent, oldCount: parentPreviousCount, newCount: record.parentCount, oldFlair: null, newFlair: null },
       confirmer: { ...confirmer, oldCount: confirmerPreviousCount, newCount: record.confirmerCount, oldFlair: null, newFlair: null },
     }

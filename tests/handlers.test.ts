@@ -188,6 +188,64 @@ function mockConfirmationContext(
   return { ctx: ctx as any, event: event as any, redis, setUserFlair, submitComment, getUserFlair }
 }
 
+const listing = (children: any[]) => ({ all: vi.fn(async () => children) })
+
+/** Monthly thread with one trade comment and one confirmation reply, which has replies by `confirmReplyAuthors`. */
+function mockMonthlyThread(ctx: any, confirmReplyAuthors: string[] = []) {
+  const confirmReplies = listing(confirmReplyAuthors.map((authorName, i) => ({
+    id: `t1_reply${i}`,
+    body: 'Trade confirmed',
+    authorName,
+    parentId: 't1_confirm',
+    postId: 't3_post',
+    permalink: `https://reddit.test/r/PlasticModelExchange/comments/post/_/reply${i}`,
+    replies: listing([]),
+  })))
+  const confirm = {
+    id: 't1_confirm',
+    body: 'confirmed',
+    authorName: 'buyer',
+    parentId: 't1_parent',
+    postId: 't3_post',
+    permalink: 'https://reddit.test/r/PlasticModelExchange/comments/post/_/confirm',
+    replies: confirmReplies,
+  }
+  const parent = {
+    id: 't1_parent',
+    body: 'sold to u/buyer',
+    authorName: 'seller',
+    parentId: 't3_post',
+    postId: 't3_post',
+    permalink: 'https://reddit.test/r/PlasticModelExchange/comments/post/_/parent',
+    replies: listing([confirm]),
+  }
+  ctx.reddit.getComments = vi.fn(() => listing([parent]))
+  const getCommentById = ctx.reddit.getCommentById
+  ctx.reddit.getCommentById = vi.fn(async (id: string) => ({
+    ...(await getCommentById(id)),
+    replies: id === 't1_confirm' ? confirmReplies : listing([]),
+  }))
+}
+
+function committedClaim(): Record<string, string> {
+  return {
+    'confirmed:t1_parent': JSON.stringify({
+      commentId: 't1_confirm',
+      replyToCommentId: 't1_confirm',
+      parentAuthor: 'seller',
+      confirmer: 'buyer',
+      modApproval: true,
+      parentPreviousCount: 4,
+      parentCount: 5,
+      confirmerPreviousCount: 2,
+      confirmerCount: 3,
+      createdAt: '2026-10-09T11:18:55.000Z',
+    }),
+    'confirmations:seller': '5',
+    'confirmations:buyer': '3',
+  }
+}
+
 afterEach(() => {
   vi.useRealTimers()
 })
@@ -602,30 +660,12 @@ describe('approveConfirmationFromComment', () => {
     expect(submitComment).toHaveBeenCalledWith(expect.objectContaining({
       id: 't1_confirm',
     }))
+    expect(redis.store.get('processed:t1_confirm')).toBe('1')
   })
 
   it('rescan processes confirmations that only appear as replies to top-level comments', async () => {
     const { ctx, redis, submitComment } = mockConfirmationContext()
-    const listing = (children: any[]) => ({ all: vi.fn(async () => children) })
-    const confirm = {
-      id: 't1_confirm',
-      body: 'confirmed',
-      authorName: 'buyer',
-      parentId: 't1_parent',
-      postId: 't3_post',
-      permalink: 'https://reddit.test/r/PlasticModelExchange/comments/post/_/confirm',
-      replies: listing([]),
-    }
-    const parent = {
-      id: 't1_parent',
-      body: 'sold to u/buyer',
-      authorName: 'seller',
-      parentId: 't3_post',
-      postId: 't3_post',
-      permalink: 'https://reddit.test/r/PlasticModelExchange/comments/post/_/parent',
-      replies: listing([confirm]),
-    }
-    ctx.reddit.getComments = vi.fn(() => listing([parent]))
+    mockMonthlyThread(ctx)
 
     const result = await rescanCurrentMonthlyPost(ctx)
 
@@ -634,6 +674,30 @@ describe('approveConfirmationFromComment', () => {
     expect(redis.store.get('confirmations:buyer')).toBe('3')
     expect(submitComment).toHaveBeenCalledWith(expect.objectContaining({ id: 't1_confirm' }))
     expect(redis.store.get('processed:t1_confirm')).toBe('1')
+  })
+
+  it('rescan finishes a committed confirmation whose reply was never posted', async () => {
+    const { ctx, redis, submitComment } = mockConfirmationContext(committedClaim())
+    mockMonthlyThread(ctx)
+
+    await rescanCurrentMonthlyPost(ctx)
+
+    expect(redis.store.get('confirmations:seller')).toBe('5')
+    expect(redis.store.get('confirmations:buyer')).toBe('3')
+    expect(submitComment).toHaveBeenCalledOnce()
+    expect(submitComment).toHaveBeenCalledWith(expect.objectContaining({ id: 't1_confirm' }))
+  })
+
+  it('rescan does not reply again to a committed confirmation the bot already answered', async () => {
+    const { ctx, redis, submitComment } = mockConfirmationContext(committedClaim())
+    mockMonthlyThread(ctx, ['swap-conf-bot'])
+
+    const result = await rescanCurrentMonthlyPost(ctx)
+
+    expect(result).toEqual({ scanned: 3, processed: 2 })
+    expect(redis.store.get('confirmations:seller')).toBe('5')
+    expect(redis.store.get('confirmations:buyer')).toBe('3')
+    expect(submitComment).not.toHaveBeenCalled()
   })
 
   it('does not approve a top-level comment', async () => {
