@@ -6,23 +6,17 @@ import {
   onCommentSubmit,
   onMonthlyPost,
   onModAction,
-  onPostSubmit,
   redditApiCall,
   refreshFlairTemplateCache,
   refreshModeratorCache,
   rescanCurrentMonthlyPost,
 } from './handlers.js'
 import { defaults } from './defaults/index.js'
-import {
-  MOD_NEW_POST_DISCORD_WEBHOOK_SETTING,
-  validateDiscordWebhookSetting,
-} from './discordNotify.js'
 import { DEFAULT_LANGUAGE_SETTINGS, getLanguageSettings } from './language.js'
 
 Devvit.configure({
   redditAPI: true,
   redis: true,
-  http: { domains: ['discord.com'] },
 })
 
 Devvit.addSettings([
@@ -62,16 +56,6 @@ Devvit.addSettings([
     type: 'string',
     label: 'Date locale for month names in monthly post title (BCP 47 tag, e.g. "en-US", "es-ES", "de-DE")',
     defaultValue: DEFAULT_LANGUAGE_SETTINGS.dateLocale,
-  },
-  {
-    name: MOD_NEW_POST_DISCORD_WEBHOOK_SETTING,
-    type: 'string',
-    label: 'Mod new post Discord webhook',
-    helpText:
-      'Optional. Paste a Discord channel webhook URL to notify that channel on every new post (title, author, body, and structured JSON for automation). Leave blank to disable.',
-    defaultValue: '',
-    isSecret: true,
-    onValidate: ({ value }) => validateDiscordWebhookSetting(value),
   },
 ])
 
@@ -120,8 +104,6 @@ const adjustTradeCountForm = Devvit.createForm((data: AdjustTradeCountFormData =
 
 Devvit.addTrigger({ event: 'CommentSubmit', onEvent: onCommentSubmit })
 Devvit.addTrigger({ event: 'ModAction', onEvent: onModAction })
-Devvit.addTrigger({ event: 'PostSubmit', onEvent: onPostSubmit })
-
 Devvit.addSchedulerJob({ name: 'monthly-post', onRun: onMonthlyPost })
 
 Devvit.addSchedulerJob({

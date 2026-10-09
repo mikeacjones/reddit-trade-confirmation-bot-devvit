@@ -6,10 +6,6 @@
   },
   "permissions": {
     "redis": true,
-    "http": {
-      "enable": true,
-      "domains": ["discord.com"]
-    },
     "reddit": {
       "enable": true,
       "scope": "moderator"
@@ -30,8 +26,7 @@
       "onAppInstall",
       "onAppUpgrade",
       "onCommentSubmit",
-      "onModAction",
-      "onPostSubmit"
+      "onModAction"
     ]
   },
   "marketingAssets": {

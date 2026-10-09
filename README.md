@@ -14,7 +14,6 @@ A Reddit Devvit app that tracks completed trades for swap subreddits. When two u
 - **Manual adjustments.** Moderators can use **Set user trade count** to repair a user's count and apply the matching flair.
 - **Hourly rescan.** Every hour (at half past) the bot re-scans the current monthly thread and processes any confirmations it missed (for example, after Reddit API rate limiting). The same scan can be run on demand with **Re-scan monthly post comments**.
 - **Lock-down.** The previous monthly thread is locked as part of creating or refreshing the new monthly thread.
-- **Mod Discord notifications (optional).** If a Discord webhook URL is configured in app settings, every new post is forwarded to that channel with title, author, body, and a structured JSON payload for automation listeners.
 
 ## Installation
 
@@ -65,20 +64,6 @@ Open the app's settings page in mod tools. Every field is pre-populated with a w
 | **Can't-confirm-username reply** | Reply when the parent comment doesn't tag the confirmer with `u/`. |
 | **Old-thread reply** | Reply when someone tries to confirm in a previous month's locked thread. |
 | **Optional submission flair ID** | Link-flair template ID to apply to the monthly post. Leave blank to skip. |
-| **Mod new post Discord webhook** | Optional Discord channel webhook URL. When set, every new post is posted to that channel. Leave blank to disable. |
-
-#### Discord new-post notifications
-
-1. In Discord: channel settings → Integrations → Webhooks → New Webhook → copy the URL.
-2. Paste it into **Mod new post Discord webhook** in the app install settings for that subreddit.
-3. Each installing subreddit uses its own webhook — nothing is shared across installs.
-
-Each Discord message includes:
-
-- A human-readable embed (title, author, body/link, flair, post id)
-- A fenced `json` block marked with `"event": "reddit.new_post"` so a bot or automation can parse new posts reliably
-
-Long post bodies are truncated to fit Discord limits; the payload sets `bodyTruncated: true` when that happens. Open the Reddit permalink for the full text.
 
 #### Title placeholders
 
@@ -139,12 +124,6 @@ All accessible from the subreddit's three-dot menu. Mods only.
 | **Set up default user flairs** | One-time creation of the ten default `Trades: N-M` flair templates (see step 1). |
 | **Refresh flair template cache** | Makes the bot pick up manual flair-template edits immediately. |
 | **Refresh moderator cache** | Makes the bot pick up moderator-list changes immediately. |
-
-## Fetch Domains
-
-The following domains are requested for this app:
-
-- `discord.com` — Used to POST new-post notifications to Discord channel webhooks configured per subreddit install.
 
 ## Legal
 
