@@ -16,7 +16,7 @@
   "devDependencies": {
     "@vitest/coverage-v8": "^5.0.3",
     "devvit": "0.14.7",
-    "typescript": "^6.0.3",
+    "typescript": "^7.0.2",
     "vitest": "^5.0.3"
   },
   "license": "BSD-3-Clause"
