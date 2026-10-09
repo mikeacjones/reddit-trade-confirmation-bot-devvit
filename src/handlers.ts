@@ -1,5 +1,6 @@
 export { adjustUserTradeCount } from './adjustments.js'
 export { approveConfirmationFromComment, onCommentSubmit, rescanCurrentMonthlyPost } from './confirmations.js'
+export { onPostSubmit } from './discordNotify.js'
 export { refreshFlairTemplateCache } from './flairCache.js'
 export { onMonthlyPost } from './monthly.js'
 export { onModAction, refreshModeratorCache } from './moderators.js'
