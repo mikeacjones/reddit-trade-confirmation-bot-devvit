@@ -1,5 +1,5 @@
 import type { CommentSubmit } from '@devvit/protos'
-import type { TriggerContext } from '@devvit/public-api'
+import type { Comment, TriggerContext } from '@devvit/public-api'
 import {
   evaluateConfirmation,
   findFlairTemplate,
@@ -23,6 +23,8 @@ import { errorText, expirationFromNow } from './utils.js'
 
 const PROCESSED_COMMENT_TTL_MS = 45 * 24 * 60 * 60 * 1000
 const PROCESSING_COMMENT_TTL_MS = 5 * 60 * 1000
+// Depth 1 holds confirmations; depth 2 holds moderator approvals of them.
+const RESCAN_REPLY_DEPTH = 2
 
 type RejectionReason = NonNullable<ValidationResult['reason']>
 
@@ -301,9 +303,10 @@ export async function rescanCurrentMonthlyPost(ctx: TriggerContext): Promise<{ s
   const postId = await ctx.redis.get('currentMonthlyPost')
   if (!postId) return { scanned: 0, processed: 0 }
   const { name: subredditName } = await redditApiCall(ctx, () => ctx.reddit.getCurrentSubreddit(), 'get current subreddit')
-  const comments = await redditApiCall(ctx, () =>
+  const topLevel = await redditApiCall(ctx, () =>
     ctx.reddit.getComments({ postId: postId as `t3_${string}`, limit: 1000, pageSize: 100 }).all(),
   `get comments for ${postId}`)
+  const comments = await redditApiCall(ctx, () => withReplies(topLevel, RESCAN_REPLY_DEPTH), `get replies for ${postId}`)
   let processed = 0
   for (const c of comments) {
     const ran = await processComment(ctx, {
@@ -317,6 +320,20 @@ export async function rescanCurrentMonthlyPost(ctx: TriggerContext): Promise<{ s
     if (ran) processed++
   }
   return { scanned: comments.length, processed }
+}
+
+/** getComments only lists top-level comments; replies hang off each comment's `replies` listing. */
+async function withReplies(roots: Comment[], maxDepth: number): Promise<Comment[]> {
+  const all: Comment[] = []
+  let level = roots
+  for (let depth = 0; level.length > 0; depth++) {
+    all.push(...level)
+    if (depth >= maxDepth) break
+    const next: Comment[] = []
+    for (const comment of level) next.push(...(await comment.replies.all()))
+    level = next
+  }
+  return all
 }
 
 async function fetchComment(ctx: TriggerContext, fullName: string): Promise<FetchedComment | null> {

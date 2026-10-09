@@ -4,6 +4,7 @@ import {
   approveConfirmationFromComment,
   onCommentSubmit,
   onMonthlyPost,
+  rescanCurrentMonthlyPost,
 } from '../src/handlers'
 
 function mockRedis(initial: Record<string, string> = {}) {
@@ -601,6 +602,38 @@ describe('approveConfirmationFromComment', () => {
     expect(submitComment).toHaveBeenCalledWith(expect.objectContaining({
       id: 't1_confirm',
     }))
+  })
+
+  it('rescan processes confirmations that only appear as replies to top-level comments', async () => {
+    const { ctx, redis, submitComment } = mockConfirmationContext()
+    const listing = (children: any[]) => ({ all: vi.fn(async () => children) })
+    const confirm = {
+      id: 't1_confirm',
+      body: 'confirmed',
+      authorName: 'buyer',
+      parentId: 't1_parent',
+      postId: 't3_post',
+      permalink: 'https://reddit.test/r/PlasticModelExchange/comments/post/_/confirm',
+      replies: listing([]),
+    }
+    const parent = {
+      id: 't1_parent',
+      body: 'sold to u/buyer',
+      authorName: 'seller',
+      parentId: 't3_post',
+      postId: 't3_post',
+      permalink: 'https://reddit.test/r/PlasticModelExchange/comments/post/_/parent',
+      replies: listing([confirm]),
+    }
+    ctx.reddit.getComments = vi.fn(() => listing([parent]))
+
+    const result = await rescanCurrentMonthlyPost(ctx)
+
+    expect(result).toEqual({ scanned: 2, processed: 1 })
+    expect(redis.store.get('confirmations:seller')).toBe('5')
+    expect(redis.store.get('confirmations:buyer')).toBe('3')
+    expect(submitComment).toHaveBeenCalledWith(expect.objectContaining({ id: 't1_confirm' }))
+    expect(redis.store.get('processed:t1_confirm')).toBe('1')
   })
 
   it('does not approve a top-level comment', async () => {
