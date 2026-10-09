@@ -6,17 +6,24 @@ import {
   onCommentSubmit,
   onMonthlyPost,
   onModAction,
+  onPostSubmit,
   redditApiCall,
   refreshFlairTemplateCache,
   refreshModeratorCache,
   rescanCurrentMonthlyPost,
 } from './handlers.js'
 import { defaults } from './defaults/index.js'
+import {
+  MOD_NEW_POST_DISCORD_INCLUDE_JSON_SETTING,
+  MOD_NEW_POST_DISCORD_WEBHOOK_SETTING,
+  validateDiscordWebhookSetting,
+} from './discordNotify.js'
 import { DEFAULT_LANGUAGE_SETTINGS, getLanguageSettings } from './language.js'
 
 Devvit.configure({
   redditAPI: true,
   redis: true,
+  http: { domains: ['discord.com'] },
 })
 
 Devvit.addSettings([
@@ -56,6 +63,23 @@ Devvit.addSettings([
     type: 'string',
     label: 'Date locale for month names in monthly post title (BCP 47 tag, e.g. "en-US", "es-ES", "de-DE")',
     defaultValue: DEFAULT_LANGUAGE_SETTINGS.dateLocale,
+  },
+  {
+    name: MOD_NEW_POST_DISCORD_WEBHOOK_SETTING,
+    type: 'string',
+    label: 'Mod new post Discord webhook',
+    helpText:
+      'Optional. Paste a Discord channel webhook URL to notify that channel on every new post (title, flair, author trade count, body, and mod links). Leave blank to disable.',
+    defaultValue: '',
+    onValidate: ({ value }) => validateDiscordWebhookSetting(value),
+  },
+  {
+    name: MOD_NEW_POST_DISCORD_INCLUDE_JSON_SETTING,
+    type: 'boolean',
+    label: 'Include raw JSON in Discord new post notifications',
+    helpText:
+      'Attaches a reddit_new_post.json file to each Discord message for bots and automation, shown as a download at the bottom of the card.',
+    defaultValue: false,
   },
 ])
 
@@ -104,6 +128,8 @@ const adjustTradeCountForm = Devvit.createForm((data: AdjustTradeCountFormData =
 
 Devvit.addTrigger({ event: 'CommentSubmit', onEvent: onCommentSubmit })
 Devvit.addTrigger({ event: 'ModAction', onEvent: onModAction })
+Devvit.addTrigger({ event: 'PostSubmit', onEvent: onPostSubmit })
+
 Devvit.addSchedulerJob({ name: 'monthly-post', onRun: onMonthlyPost })
 
 Devvit.addSchedulerJob({

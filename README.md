@@ -14,6 +14,7 @@ A Reddit Devvit app that tracks completed trades for swap subreddits. When two u
 - **Manual adjustments.** Moderators can use **Set user trade count** to repair a user's count and apply the matching flair.
 - **Hourly rescan.** Every hour (at half past) the bot re-scans the current monthly thread and processes any confirmations it missed (for example, after Reddit API rate limiting). The same scan can be run on demand with **Re-scan monthly post comments**.
 - **Lock-down.** The previous monthly thread is locked as part of creating or refreshing the new monthly thread.
+- **Mod Discord notifications (optional).** If a Discord webhook URL is configured in app settings, every new post is forwarded to that channel with title, author, body, and a structured JSON payload for automation listeners.
 
 ## Installation
 
@@ -64,6 +65,26 @@ Open the app's settings page in mod tools. Every field is pre-populated with a w
 | **Can't-confirm-username reply** | Reply when the parent comment doesn't tag the confirmer with `u/`. |
 | **Old-thread reply** | Reply when someone tries to confirm in a previous month's locked thread. |
 | **Optional submission flair ID** | Link-flair template ID to apply to the monthly post. Leave blank to skip. |
+| **Mod new post Discord webhook** | Optional Discord channel webhook URL. When set, every new post is posted to that channel. Leave blank to disable. |
+| **Include raw JSON in Discord new post notifications** | Off by default. When on, each Discord message also carries the `reddit_new_post.json` attachment described below. |
+
+#### Discord new-post notifications
+
+1. In Discord: channel settings → Integrations → Webhooks → New Webhook → copy the URL.
+2. Paste it into **Mod new post Discord webhook** in the app install settings for that subreddit.
+3. Each installing subreddit uses its own webhook — nothing is shared across installs.
+
+Messages use Discord's Components V2 layout. Each one is a card containing:
+
+- The linked post title, post flair, author, and relative post time (plus NSFW/spoiler badges)
+- Trade-screening details: the author's confirmed trade count, user flair, account age, and karma
+- A preview of the post body (or the link for link posts) and up to four post images
+- **Open post**, **Author profile**, and **Message author** link buttons
+- Moderator link buttons: **Remove (old Reddit)** opens the post on old Reddit, where moderators get inline remove/spam/approve controls, and **Mod queue**. (Discord webhook buttons can only open URLs, so removal can't happen directly from Discord.)
+
+If **Include raw JSON** is on, the message also carries a `reddit_new_post.json` attachment with the full payload (`"event": "reddit.new_post"`, including the untruncated post body). It appears as a download row at the bottom of the card (Discord discards attachments the card doesn't display). Automation reads it from the message's `attachments` (filename `reddit_new_post.json`), downloads its `url`, and `JSON.parse`s it.
+
+Long post bodies are truncated in the card preview; open the post (or read the JSON attachment) for the full text.
 
 #### Title placeholders
 
@@ -124,6 +145,12 @@ All accessible from the subreddit's three-dot menu. Mods only.
 | **Set up default user flairs** | One-time creation of the ten default `Trades: N-M` flair templates (see step 1). |
 | **Refresh flair template cache** | Makes the bot pick up manual flair-template edits immediately. |
 | **Refresh moderator cache** | Makes the bot pick up moderator-list changes immediately. |
+
+## Fetch Domains
+
+The following domains are requested for this app:
+
+- `discord.com` — Used to POST new-post notifications to Discord channel webhooks configured per subreddit install.
 
 ## Legal
 
