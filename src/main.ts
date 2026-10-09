@@ -78,7 +78,7 @@ Devvit.addSettings([
     type: 'boolean',
     label: 'Include raw JSON in Discord new post notifications',
     helpText:
-      'Attaches a reddit_new_post.json file to each Discord message for bots and automation. The file is not shown in Discord.',
+      'Attaches a reddit_new_post.json file to each Discord message for bots and automation, shown as a download at the bottom of the card.',
     defaultValue: false,
   },
 ])

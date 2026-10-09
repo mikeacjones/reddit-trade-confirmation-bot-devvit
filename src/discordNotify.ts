@@ -23,6 +23,7 @@ const COMPONENT_ACTION_ROW = 1
 const COMPONENT_BUTTON = 2
 const COMPONENT_TEXT_DISPLAY = 10
 const COMPONENT_MEDIA_GALLERY = 12
+const COMPONENT_FILE = 13
 const COMPONENT_SEPARATOR = 14
 const COMPONENT_CONTAINER = 17
 const BUTTON_STYLE_LINK = 5
@@ -309,12 +310,16 @@ export function buildDiscordWebhookBody(
   }
   if (modButtons.length > 0) card.push({ type: COMPONENT_ACTION_ROW, components: modButtons })
 
+  // Components V2 discards attachments that no component references, so the JSON file must be shown.
+  if (options.includeJson) {
+    card.push({ type: COMPONENT_FILE, file: { url: `attachment://${REDDIT_NEW_POST_ATTACHMENT}` } })
+  }
+
   const body: DiscordWebhookBody = {
     flags: IS_COMPONENTS_V2,
     components: [{ type: COMPONENT_CONTAINER, accent_color: REDDIT_ORANGE, components: card }],
     allowed_mentions: { parse: [] },
   }
-  // Components V2 only displays attachments that a component references, so this file stays invisible.
   if (options.includeJson) {
     body.attachments = [{ id: 0, filename: REDDIT_NEW_POST_ATTACHMENT, description: payload.event }]
   }
@@ -395,7 +400,11 @@ export async function onPostSubmit(event: PostSubmit, ctx: TriggerContext): Prom
       )
       return
     }
-    console.log(`Sent Discord new-post notification for ${payload.postId} (${response.status})`)
+    const sent = (await response.json().catch(() => null)) as { attachments?: unknown[] } | null
+    const stored = Array.isArray(sent?.attachments) ? sent.attachments.length : 'unknown'
+    console.log(
+      `Sent Discord new-post notification for ${payload.postId} (${response.status}, json ${includeJson ? 'on' : 'off'}, attachments stored: ${stored})`,
+    )
   } catch (error) {
     console.warn(
       `Discord webhook request failed for ${payload.postId}: ${error instanceof Error ? error.message : String(error)}`,

@@ -154,11 +154,18 @@ describe('buildDiscordWebhookBody', () => {
     expect(buttons[4]?.url).toBe('https://www.reddit.com/r/PlasticModelExchange/about/modqueue/')
   })
 
-  it('declares an unreferenced json attachment when enabled so nothing extra is visible', () => {
+  it('attaches the json file and shows it as the last card component when enabled', () => {
     const payload = buildRedditNewPostPayload(sampleEvent())!
     const body = buildDiscordWebhookBody(payload, { includeJson: true })
     expect(body.attachments).toEqual([{ id: 0, filename: REDDIT_NEW_POST_ATTACHMENT, description: REDDIT_NEW_POST_EVENT }])
     expect(body.components).toHaveLength(1)
+    const card = (body.components[0] as AnyComponent).components as AnyComponent[]
+    expect(card.at(-1)).toEqual({ type: 13, file: { url: `attachment://${REDDIT_NEW_POST_ATTACHMENT}` } })
+  })
+
+  it('omits the json file component when disabled', () => {
+    const payload = buildRedditNewPostPayload(sampleEvent())!
+    const body = buildDiscordWebhookBody(payload)
     expect(flatten(body.components as AnyComponent[]).some(c => c.type === 13)).toBe(false)
   })
 

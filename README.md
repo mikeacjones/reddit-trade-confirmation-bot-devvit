@@ -66,7 +66,7 @@ Open the app's settings page in mod tools. Every field is pre-populated with a w
 | **Old-thread reply** | Reply when someone tries to confirm in a previous month's locked thread. |
 | **Optional submission flair ID** | Link-flair template ID to apply to the monthly post. Leave blank to skip. |
 | **Mod new post Discord webhook** | Optional Discord channel webhook URL. When set, every new post is posted to that channel. Leave blank to disable. |
-| **Include raw JSON in Discord new post notifications** | Off by default. When on, each Discord message also carries the hidden `reddit_new_post.json` attachment described below. |
+| **Include raw JSON in Discord new post notifications** | Off by default. When on, each Discord message also carries the `reddit_new_post.json` attachment described below. |
 
 #### Discord new-post notifications
 
@@ -82,7 +82,7 @@ Messages use Discord's Components V2 layout. Each one is a card containing:
 - **Open post**, **Author profile**, and **Message author** link buttons
 - Moderator link buttons: **Remove (old Reddit)** opens the post on old Reddit, where moderators get inline remove/spam/approve controls, and **Mod queue**. (Discord webhook buttons can only open URLs, so removal can't happen directly from Discord.)
 
-If **Include raw JSON** is on, the message also carries a `reddit_new_post.json` attachment with the full payload (`"event": "reddit.new_post"`, including the untruncated post body). No component references it, so it isn't shown in Discord; automation reads it from the message's `attachments` (filename `reddit_new_post.json`), downloads its `url`, and `JSON.parse`s it.
+If **Include raw JSON** is on, the message also carries a `reddit_new_post.json` attachment with the full payload (`"event": "reddit.new_post"`, including the untruncated post body). It appears as a download row at the bottom of the card (Discord discards attachments the card doesn't display). Automation reads it from the message's `attachments` (filename `reddit_new_post.json`), downloads its `url`, and `JSON.parse`s it.
 
 Long post bodies are truncated in the card preview; open the post (or read the JSON attachment) for the full text.
 
