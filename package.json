@@ -11,11 +11,11 @@
     "build": "devvit upload --dry-run"
   },
   "dependencies": {
-    "@devvit/public-api": "0.14.7"
+    "@devvit/public-api": "0.14.8"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^5.0.3",
-    "devvit": "0.14.7",
+    "devvit": "0.14.8",
     "typescript": "^7.0.2",
     "vitest": "^5.0.3"
   },
