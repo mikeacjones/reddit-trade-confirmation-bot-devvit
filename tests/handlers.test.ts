@@ -225,6 +225,7 @@ function mockMonthlyThread(ctx: any, confirmReplyAuthors: string[] = []) {
     ...(await getCommentById(id)),
     replies: id === 't1_confirm' ? confirmReplies : listing([]),
   }))
+  return { parentReplies: parent.replies.all }
 }
 
 function committedClaim(): Record<string, string> {
@@ -404,6 +405,17 @@ describe('onMonthlyPost', () => {
     expect(previousPost.lock).toHaveBeenCalledOnce()
     expect(newPost.setSuggestedCommentSort).toHaveBeenCalledWith('NEW')
     expect(newPost.sticky).toHaveBeenCalledOnce()
+    expect(redis.store.get('currentMonthlyPost')).toBe('t3_new')
+  })
+
+  it('points at the new monthly post even when a later step fails', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(Date.UTC(2026, 4, 1, 0, 0, 0)))
+    const { ctx, redis, newPost } = mockMonthlyContext({ currentMonthlyPost: 't3_old' })
+    newPost.sticky.mockRejectedValue(new Error('reddit 500 server error'))
+
+    await expect(onMonthlyPost(undefined as any, ctx)).rejects.toThrow('500')
+
     expect(redis.store.get('currentMonthlyPost')).toBe('t3_new')
   })
 
@@ -694,10 +706,64 @@ describe('approveConfirmationFromComment', () => {
 
     const result = await rescanCurrentMonthlyPost(ctx)
 
-    expect(result).toEqual({ scanned: 3, processed: 2 })
+    expect(result).toEqual({ scanned: 2, processed: 1 })
     expect(redis.store.get('confirmations:seller')).toBe('5')
     expect(redis.store.get('confirmations:buyer')).toBe('3')
     expect(submitComment).not.toHaveBeenCalled()
+  })
+
+  it('rescan skips fetching replies for a trade whose confirmation is already processed', async () => {
+    const { ctx, redis, submitComment } = mockConfirmationContext({
+      ...committedClaim(),
+      'processed:t1_confirm': '1',
+    })
+    const thread = mockMonthlyThread(ctx)
+
+    const result = await rescanCurrentMonthlyPost(ctx)
+
+    expect(result).toEqual({ scanned: 1, processed: 0 })
+    expect(thread.parentReplies).not.toHaveBeenCalled()
+    expect(submitComment).not.toHaveBeenCalled()
+    expect(redis.store.get('confirmations:seller')).toBe('5')
+  })
+
+  it('approves a reply that does not contain the confirmation keyword', async () => {
+    const { ctx, redis } = mockConfirmationContext()
+    const getCommentById = ctx.reddit.getCommentById
+    ctx.reddit.getCommentById = vi.fn(async (id: string) => ({
+      ...(await getCommentById(id)),
+      ...(id === 't1_confirm' ? { body: 'thanks, all good' } : {}),
+    }))
+
+    const result = await approveConfirmationFromComment(ctx, 't1_confirm')
+
+    expect(result.approved).toBe(true)
+    expect(redis.store.get('confirmations:seller')).toBe('5')
+    expect(redis.store.get('confirmations:buyer')).toBe('3')
+  })
+
+  it('rescan keeps a committed confirmation and retries its flair after a Reddit failure', async () => {
+    const failingFlair = vi.fn(async () => {
+      throw new Error('reddit 500 server error')
+    })
+    const { ctx, redis } = mockConfirmationContext({}, { setUserFlair: failingFlair })
+    mockMonthlyThread(ctx)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+
+    const first = await rescanCurrentMonthlyPost(ctx)
+
+    expect(first.processed).toBe(0)
+    expect(redis.store.get('processed:t1_confirm')).toBeUndefined()
+    expect(redis.store.get('confirmations:seller')).toBe('5')
+    warn.mockRestore()
+
+    ctx.reddit.setUserFlair = vi.fn(async () => undefined)
+    const second = await rescanCurrentMonthlyPost(ctx)
+
+    expect(second.processed).toBe(1)
+    expect(ctx.reddit.setUserFlair).toHaveBeenCalledTimes(2)
+    expect(redis.store.get('confirmations:seller')).toBe('5')
+    expect(redis.store.get('processed:t1_confirm')).toBe('1')
   })
 
   it('does not approve a top-level comment', async () => {

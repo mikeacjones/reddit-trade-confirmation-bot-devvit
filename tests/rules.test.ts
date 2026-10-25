@@ -146,13 +146,7 @@ const baseContext: ConfirmationContext = {
   parentAuthorName: 'bob',
   parentId: 'p1',
   parentIsRoot: true,
-  parentIsSaved: false,
   parentBody: 'sold to u/alice',
-  isModerator: false,
-  grandparentExists: false,
-  grandparentIsRoot: false,
-  grandparentAuthorName: '',
-  grandparentId: '',
   isCurrentSubmission: true,
 }
 
@@ -191,46 +185,18 @@ describe('evaluateConfirmation', () => {
     expect(r.valid).toBe(false)
   })
 
-  it('mod approval: valid when mod replies "approved" to a confirmation', () => {
+  it('rejects a reply to a non-top-level comment, even one saying "approved"', () => {
     const r = evaluateConfirmation(
       { ...baseComment, body: 'approved' },
-      {
-        ...baseContext,
-        parentIsRoot: false,
-        grandparentExists: true,
-        grandparentIsRoot: true,
-        grandparentAuthorName: 'carol',
-        grandparentId: 'gp1',
-        isModerator: true,
-      },
-    )
-    expect(r.valid).toBe(true)
-    expect(r.isModApproval).toBe(true)
-    expect(r.parentAuthor).toBe('carol')
-    expect(r.confirmer).toBe('bob')
-    expect(r.parentCommentId).toBe('gp1')
-    expect(r.replyToCommentId).toBe('p1')
-  })
-
-  it('rejects "approved" from non-mod', () => {
-    const r = evaluateConfirmation(
-      { ...baseComment, body: 'approved' },
-      { ...baseContext, parentIsRoot: false, isModerator: false },
+      { ...baseContext, parentIsRoot: false },
     )
     expect(r.valid).toBe(false)
+    expect(r.reason).toBeUndefined()
   })
 
   it('rejects when comment body lacks "confirmed"', () => {
     const r = evaluateConfirmation({ ...baseComment, body: 'thanks!' }, baseContext)
     expect(r.valid).toBe(false)
-  })
-
-  it('rejects already-confirmed (parent saved) with reason', () => {
-    const r = evaluateConfirmation(baseComment, { ...baseContext, parentIsSaved: true })
-    expect(r.valid).toBe(false)
-    expect(r.reason).toBe('already_confirmed')
-    expect(r.parentAuthor).toBe('bob')
-    expect(r.parentCommentId).toBe('p1')
   })
 
   it('rejects when confirmer not mentioned with cant_confirm_username reason', () => {
@@ -253,7 +219,7 @@ describe('evaluateConfirmation', () => {
     const r = evaluateConfirmation(
       { ...baseComment, body: 'confirmado!' },
       baseContext,
-      { confirmed: 'confirmado', approved: 'aprobado' },
+      'confirmado',
     )
     expect(r.valid).toBe(true)
   })
@@ -262,34 +228,25 @@ describe('evaluateConfirmation', () => {
     const r = evaluateConfirmation(
       { ...baseComment, body: 'confirmed' },
       baseContext,
-      { confirmed: 'confirmado', approved: 'aprobado' },
+      'confirmado',
     )
     expect(r.valid).toBe(false)
   })
 
-  it('mod approval works with a custom approved keyword', () => {
+  it('does not let a username that is a prefix of a hyphenated one confirm', () => {
     const r = evaluateConfirmation(
-      { ...baseComment, body: 'aprobado' },
-      {
-        ...baseContext,
-        parentIsRoot: false,
-        grandparentExists: true,
-        grandparentIsRoot: true,
-        grandparentAuthorName: 'carol',
-        grandparentId: 'gp1',
-        isModerator: true,
-      },
-      { confirmed: 'confirmado', approved: 'aprobado' },
+      { ...baseComment, authorName: 'alex' },
+      { ...baseContext, parentBody: 'sold to u/alex-trader' },
     )
-    expect(r.valid).toBe(true)
-    expect(r.isModApproval).toBe(true)
+    expect(r.valid).toBe(false)
+    expect(r.reason).toBe('cant_confirm_username')
   })
 
   it('keyword matching is case-insensitive', () => {
     const r = evaluateConfirmation(
       { ...baseComment, body: 'CONFIRMADO' },
       baseContext,
-      { confirmed: 'Confirmado', approved: 'Aprobado' },
+      'Confirmado',
     )
     expect(r.valid).toBe(true)
   })

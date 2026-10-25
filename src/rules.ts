@@ -1,7 +1,5 @@
 import { DEFAULT_LANGUAGE_SETTINGS } from './language.js'
-
-const REGEX_ESCAPE = /[.*+?^${}()|[\]\\]/g
-const escape = (s: string) => s.replace(REGEX_ESCAPE, '\\$&')
+import { escapeRegex as escape } from './utils.js'
 
 function flairCountPattern(label: string): RegExp {
   return new RegExp(`${escape(label)} (\\d+)`)
@@ -55,7 +53,8 @@ export function findFlairTemplate(
 
 export function isUsernameMentioned(parentBody: string, username: string): boolean {
   const cleaned = parentBody.replace(/\\/g, '')
-  const pattern = new RegExp(`(?:^|[^\\w/])/?u/${escape(username)}\\b`, 'i')
+  // Usernames may contain hyphens, so \b alone would let "alex" match "u/alex-trader".
+  const pattern = new RegExp(`(?:^|[^\\w/])/?u/${escape(username)}(?![\\w-])`, 'i')
   return pattern.test(cleaned)
 }
 
@@ -73,13 +72,7 @@ export interface ConfirmationContext {
   parentAuthorName: string
   parentId: string
   parentIsRoot: boolean
-  parentIsSaved: boolean
   parentBody: string
-  isModerator: boolean
-  grandparentExists: boolean
-  grandparentIsRoot: boolean
-  grandparentAuthorName: string
-  grandparentId: string
   isCurrentSubmission: boolean
 }
 
@@ -93,61 +86,21 @@ export interface ValidationResult {
   replyToCommentId?: string
 }
 
-export interface ConfirmationKeywords {
-  confirmed: string
-  approved: string
-}
-
-export const DEFAULT_CONFIRMATION_KEYWORDS: ConfirmationKeywords = {
-  confirmed: DEFAULT_LANGUAGE_SETTINGS.confirmationKeyword,
-  approved: DEFAULT_LANGUAGE_SETTINGS.approvalKeyword,
-}
-
 export function evaluateConfirmation(
   comment: CommentInput,
   ctx: ConfirmationContext,
-  keywords: ConfirmationKeywords = DEFAULT_CONFIRMATION_KEYWORDS,
+  confirmationKeyword: string = DEFAULT_LANGUAGE_SETTINGS.confirmationKeyword,
 ): ValidationResult {
-  if (comment.isRoot) {
-    return { valid: false }
-  }
+  if (comment.isRoot) return { valid: false }
 
   if (!ctx.isCurrentSubmission) return { valid: false, reason: 'old_confirmation_thread' }
   if (!ctx.parentExists || ctx.parentIsBanned) return { valid: false }
   if (!ctx.parentIsProcessable) return { valid: false }
   if (ctx.parentAuthorName === comment.authorName) return { valid: false }
 
-  const body = comment.body.toLowerCase()
-  const approvedKeyword = keywords.approved.toLowerCase()
-  const confirmedKeyword = keywords.confirmed.toLowerCase()
-
-  // Mod approval path: comment replies to a confirmation (parent is non-root).
-  if (!ctx.parentIsRoot) {
-    if (body.includes(approvedKeyword) && ctx.isModerator) {
-      if (ctx.grandparentExists && ctx.grandparentIsRoot) {
-        return {
-          valid: true,
-          isModApproval: true,
-          parentAuthor: ctx.grandparentAuthorName,
-          confirmer: ctx.parentAuthorName,
-          parentCommentId: ctx.grandparentId,
-          replyToCommentId: ctx.parentId,
-        }
-      }
-    }
-    return { valid: false }
-  }
-
-  if (!body.includes(confirmedKeyword)) return { valid: false }
-
-  if (ctx.parentIsSaved) {
-    return {
-      valid: false,
-      reason: 'already_confirmed',
-      parentAuthor: ctx.parentAuthorName,
-      parentCommentId: ctx.parentId,
-    }
-  }
+  // Only a direct reply to a top-level trade comment can confirm it.
+  if (!ctx.parentIsRoot) return { valid: false }
+  if (!comment.body.toLowerCase().includes(confirmationKeyword.toLowerCase())) return { valid: false }
 
   if (!isUsernameMentioned(ctx.parentBody, comment.authorName)) {
     return {

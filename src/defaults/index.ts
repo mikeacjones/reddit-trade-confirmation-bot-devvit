@@ -30,7 +30,7 @@ Example:
 # FAQ
 
 1. The bot mentioned that additional information is required. What should I do?
-    > If this occurs, it suggests that the bot couldn't find enough information to confirm the trade. Please [message the moderators](http://www.reddit.com/message/compose?to=%2Fr%2F{subreddit_name}), who can review and approve the trade by replying \`Approved\` to your trade comment.
+    > If this occurs, it suggests that the bot couldn't find enough information to confirm the trade. Please [message the moderators](http://www.reddit.com/message/compose?to=%2Fr%2F{subreddit_name}), who can review and approve the trade.
 
 2. The bot didn't respond to my comment. What's wrong?
     > Did you comment \`Confirmed\`? If not, add a NEW comment reply stating \`Confirmed\`. Avoid editing the existing comment. If you did reply \`Confirmed\` but received no response, please [message the moderators](http://www.reddit.com/message/compose?to=%2Fr%2F{subreddit_name}). The bot might be experiencing issues!

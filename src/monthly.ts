@@ -95,10 +95,12 @@ async function createOrRefreshMonthlyPost(
     previous,
     flairId,
   })
+  // Point at the new thread before the fallible follow-up calls; otherwise a failure there leaves
+  // the pointer on the locked old thread and replies to the new one are rejected for good.
+  await ctx.redis.set('currentMonthlyPost', post.id)
   await redditApiCall(ctx, () => post.setSuggestedCommentSort('NEW'), `set suggested sort for ${post.id}`)
   await lockPreviousMonthlyPost(ctx, previousPost, post.id)
   await redditApiCall(ctx, () => post.sticky(), `sticky monthly post ${post.id}`)
-  await ctx.redis.set('currentMonthlyPost', post.id)
 
   await redditApiCall(ctx, () => ctx.reddit.modMail.createConversation({
     subredditName,

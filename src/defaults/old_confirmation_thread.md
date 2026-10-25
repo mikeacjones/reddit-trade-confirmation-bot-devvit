@@ -1,1 +1,0 @@
-Utilize the newest confirmation thread to start a new confirmation, even if this confirmation applies to a previous month's trade.

@@ -10,7 +10,7 @@ A Reddit Devvit app that tracks completed trades for swap subreddits. When two u
 
 - **Monthly thread.** On the 1st of each month at 00:00 UTC the bot creates a stickied submission, locks the previous monthly thread, and modmails the sub.
 - **Confirmations.** When someone replies `confirmed` (case-insensitive substring) to a top-level comment in the current monthly thread, the bot validates it (the parent must tag the confirmer's username, the parent author must not be the confirmer, etc.), bumps trade counts for both users, applies updated flair, and replies.
-- **Mod approvals.** A moderator can post `approved` as a reply to a confirmation comment to count it manually.
+- **Mod approvals.** A moderator can select a reply to a trade comment and choose **Approve trade confirmation** to count it manually. The reply doesn't need to contain the confirmation keyword or tag anyone.
 - **Manual adjustments.** Moderators can use **Set user trade count** to repair a user's count and apply the matching flair.
 - **Hourly rescan.** Every hour (at half past) the bot re-scans the current monthly thread and processes any confirmations it missed (for example, after Reddit API rate limiting). The same scan can be run on demand with **Re-scan monthly post comments**.
 - **Lock-down.** The previous monthly thread is locked as part of creating or refreshing the new monthly thread.

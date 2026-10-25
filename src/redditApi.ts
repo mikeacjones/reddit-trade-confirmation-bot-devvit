@@ -12,11 +12,15 @@ const REDDIT_API_BACKOFF_KEY = 'reddit:api-backoff-until'
 
 export type RedditApiContext = Pick<TriggerContext, 'reddit' | 'redis' | 'settings'>
 
-export async function trySubmitCommentWithRetry(ctx: TriggerContext, id: string, text: string): Promise<boolean> {
-  return tryRedditWriteWithRetry(ctx, async () => {
+export async function submitCommentWithRetry(ctx: TriggerContext, id: string, text: string): Promise<void> {
+  await redditApiCall(ctx, async () => {
     await waitForCommentSubmitSlot(ctx)
     await ctx.reddit.submitComment({ id, text })
   }, `reply to ${id}`)
+}
+
+export async function trySubmitCommentWithRetry(ctx: TriggerContext, id: string, text: string): Promise<boolean> {
+  return tryRedditWriteWithRetry(ctx, () => submitCommentWithRetry(ctx, id, text), `reply to ${id}`)
 }
 
 export async function tryRedditWriteWithRetry<T>(

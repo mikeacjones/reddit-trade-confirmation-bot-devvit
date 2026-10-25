@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { setUserFlairWithFallback, trySetUserFlairWithFallback } from '../src/flairAssignment'
+import { setUserFlairWithFallback } from '../src/flairAssignment'
 
 function mockRedis() {
   const store = new Map<string, string>()
@@ -119,22 +119,5 @@ describe('setUserFlairWithFallback', () => {
 
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('flaircsv warning'))
     warn.mockRestore()
-  })
-})
-
-describe('trySetUserFlairWithFallback', () => {
-  it('returns true on success', async () => {
-    const { ctx } = mockContext()
-    expect(await trySetUserFlairWithFallback(ctx, flairOptions, 'set flair')).toBe(true)
-  })
-
-  it('returns false on failure instead of throwing', async () => {
-    const { ctx } = mockContext({
-      setUserFlair: vi.fn(async () => {
-        throw new Error('reddit 500 server error')
-      }),
-    })
-
-    expect(await trySetUserFlairWithFallback(ctx, flairOptions, 'set flair')).toBe(false)
   })
 })

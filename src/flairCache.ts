@@ -1,10 +1,7 @@
 import { getLanguageSettings } from './language.js'
 import { type FlairTemplate } from './rules.js'
 import { redditApiCall, type RedditApiContext } from './redditApi.js'
-import { expirationFromNow } from './utils.js'
-
-const REGEX_ESCAPE = /[.*+?^${}()|[\]\\]/g
-const escape = (s: string) => s.replace(REGEX_ESCAPE, '\\$&')
+import { escapeRegex as escape, expirationFromNow } from './utils.js'
 
 const FLAIR_TEMPLATE_CACHE_TTL_MS = 12 * 60 * 60 * 1000
 

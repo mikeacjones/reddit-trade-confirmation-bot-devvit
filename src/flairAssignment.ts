@@ -63,20 +63,6 @@ export async function setUserFlairWithFallback(
   }
 }
 
-export async function trySetUserFlairWithFallback(
-  ctx: RedditApiContext,
-  options: UserFlairAssignment,
-  description: string,
-): Promise<boolean> {
-  try {
-    await setUserFlairWithFallback(ctx, options, description)
-    return true
-  } catch (error) {
-    console.warn(`Reddit API write failed after retries (${description}): ${errorText(error)}`)
-    return false
-  }
-}
-
 function assertFlairCsvResult(result: FlairCsvResult | undefined, username: string): void {
   if (!result) throw new Error(`No flaircsv result returned for u/${username}`)
 

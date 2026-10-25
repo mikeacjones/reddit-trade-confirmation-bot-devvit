@@ -14,3 +14,13 @@ export function errorText(error: unknown): string {
 export function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
+
+export function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+export function parseStoredCount(value: string | undefined): number | null {
+  if (value === undefined) return null
+  const parsed = parseInt(value, 10)
+  return Number.isFinite(parsed) ? parsed : null
+}

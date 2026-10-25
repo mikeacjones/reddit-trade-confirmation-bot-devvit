@@ -1,4 +1,4 @@
-import { Devvit } from '@devvit/public-api'
+import { Devvit, type TriggerContext } from '@devvit/public-api'
 import {
   adjustUserTradeCount,
   approveConfirmationFromComment,
@@ -19,6 +19,7 @@ import {
   validateDiscordWebhookSetting,
 } from './discordNotify.js'
 import { DEFAULT_LANGUAGE_SETTINGS, getLanguageSettings } from './language.js'
+import { parseStoredCount } from './utils.js'
 
 Devvit.configure({
   redditAPI: true,
@@ -39,12 +40,6 @@ Devvit.addSettings([
     type: 'string',
     label: 'Confirmation keyword (substring users must include in a reply to confirm a trade)',
     defaultValue: DEFAULT_LANGUAGE_SETTINGS.confirmationKeyword,
-  },
-  {
-    name: 'approval_keyword',
-    type: 'string',
-    label: 'Moderator approval keyword (substring a moderator includes to approve a confirmation)',
-    defaultValue: DEFAULT_LANGUAGE_SETTINGS.approvalKeyword,
   },
   {
     name: 'flair_count_label',
@@ -140,23 +135,14 @@ Devvit.addSchedulerJob({
   },
 })
 
-Devvit.addTrigger({
-  event: 'AppInstall',
-  onEvent: async (_e, ctx) => {
-    await ensureJobsScheduled(ctx)
-    const { name } = await redditApiCall(ctx, () => ctx.reddit.getCurrentSubreddit(), 'get current subreddit')
-    await refreshModeratorCache(ctx, name)
-  },
-})
+async function onAppInstallOrUpgrade(_e: unknown, ctx: TriggerContext): Promise<void> {
+  await ensureJobsScheduled(ctx)
+  const { name } = await redditApiCall(ctx, () => ctx.reddit.getCurrentSubreddit(), 'get current subreddit')
+  await refreshModeratorCache(ctx, name)
+}
 
-Devvit.addTrigger({
-  event: 'AppUpgrade',
-  onEvent: async (_e, ctx) => {
-    await ensureJobsScheduled(ctx)
-    const { name } = await redditApiCall(ctx, () => ctx.reddit.getCurrentSubreddit(), 'get current subreddit')
-    await refreshModeratorCache(ctx, name)
-  },
-})
+Devvit.addTrigger({ event: 'AppInstall', onEvent: onAppInstallOrUpgrade })
+Devvit.addTrigger({ event: 'AppUpgrade', onEvent: onAppInstallOrUpgrade })
 
 Devvit.addMenuItem({
   label: 'Trigger monthly post now',
@@ -242,12 +228,6 @@ function pickTextColor(hex: string): 'light' | 'dark' {
   const g = parseInt(hex.slice(3, 5), 16)
   const b = parseInt(hex.slice(5, 7), 16)
   return (r * 299 + g * 587 + b * 114) / 1000 > 128 ? 'dark' : 'light'
-}
-
-function parseStoredCount(value: string | undefined): number | null {
-  if (value === undefined) return null
-  const parsed = parseInt(value, 10)
-  return Number.isFinite(parsed) ? parsed : null
 }
 
 Devvit.addMenuItem({

@@ -10,22 +10,20 @@ import {
 import { defaults } from './defaults/index.js'
 import { getLanguageSettings, type LanguageSettings } from './language.js'
 import { render } from './templates.js'
-import { trySetUserFlairWithFallback } from './flairAssignment.js'
+import { setUserFlairWithFallback } from './flairAssignment.js'
 import { loadFlairTemplates, refreshFlairTemplateCache } from './flairCache.js'
 import { seedTradeCountFromFlair } from './migration.js'
 import { isUserModerator } from './moderators.js'
 import {
   redditApiCall,
+  submitCommentWithRetry,
   trySubmitCommentWithRetry,
 } from './redditApi.js'
 import { withUserFlairLock } from './userFlairState.js'
-import { errorText, expirationFromNow } from './utils.js'
+import { errorText, expirationFromNow, parseStoredCount } from './utils.js'
 
 const PROCESSED_COMMENT_TTL_MS = 45 * 24 * 60 * 60 * 1000
 const PROCESSING_COMMENT_TTL_MS = 5 * 60 * 1000
-// Depth 1 holds confirmations; depth 2 holds moderator approvals of them.
-const RESCAN_REPLY_DEPTH = 2
-
 type RejectionReason = NonNullable<ValidationResult['reason']>
 
 interface ProcessableComment {
@@ -159,12 +157,8 @@ async function processCommentOnce(
   if (submission.locked) return true
 
   const isCurrent = submission.id === (await ctx.redis.get('currentMonthlyPost'))
-  const isModerator = await isUserModerator(ctx, subredditName, comment.author)
 
   const parent = await fetchComment(ctx, comment.parentId)
-  const grandparent = shouldFetchGrandparent(comment, parent, language.approvalKeyword)
-    ? await fetchComment(ctx, parent.parentId)
-    : null
 
   const result = evaluateConfirmation(
     {
@@ -180,16 +174,10 @@ async function processCommentOnce(
       parentAuthorName: parent?.authorName ?? '',
       parentId: parent?.id ?? '',
       parentIsRoot: parent?.isRoot ?? false,
-      parentIsSaved: false,
       parentBody: parent?.body ?? '',
-      isModerator,
-      grandparentExists: !!grandparent,
-      grandparentIsRoot: grandparent?.isRoot ?? false,
-      grandparentAuthorName: grandparent?.authorName ?? '',
-      grandparentId: grandparent?.id ?? '',
       isCurrentSubmission: isCurrent,
     },
-    { confirmed: language.confirmationKeyword, approved: language.approvalKeyword },
+    language.confirmationKeyword,
   )
 
   if (!result.valid) {
@@ -233,9 +221,6 @@ export async function approveConfirmationFromComment(
   }
   if (!target.authorName) {
     return { approved: false, message: 'Selected comment has no processable author' }
-  }
-  if (!target.body.toLowerCase().includes(language.confirmationKeyword.toLowerCase())) {
-    return { approved: false, message: 'Selected comment does not look like a confirmation' }
   }
 
   const parent = await fetchComment(ctx, target.parentId)
@@ -308,34 +293,48 @@ export async function rescanCurrentMonthlyPost(ctx: TriggerContext): Promise<{ s
   const topLevel = await redditApiCall(ctx, () =>
     ctx.reddit.getComments({ postId: postId as `t3_${string}`, limit: 1000, pageSize: 100 }).all(),
   `get comments for ${postId}`)
-  const comments = await redditApiCall(ctx, () => withReplies(topLevel, RESCAN_REPLY_DEPTH), `get replies for ${postId}`)
+  const comments: Comment[] = [...topLevel]
+  for (const root of topLevel) {
+    if (await isSettledTrade(ctx, root.id)) continue
+    try {
+      comments.push(...await redditApiCall(ctx, () => root.replies.all(), `get replies for ${root.id}`))
+    } catch (error) {
+      console.warn(`Rescan could not load replies for ${root.id}: ${errorText(error)}`)
+    }
+  }
   let processed = 0
   for (const c of comments) {
-    const ran = await processComment(ctx, {
-      id: c.id,
-      body: c.body,
-      author: c.authorName,
-      parentId: c.parentId,
-      postId: c.postId,
-      permalink: c.permalink,
-    }, subredditName)
-    if (ran) processed++
+    try {
+      const ran = await processComment(ctx, {
+        id: c.id,
+        body: c.body,
+        author: c.authorName,
+        parentId: c.parentId,
+        postId: c.postId,
+        permalink: c.permalink,
+      }, subredditName)
+      if (ran) processed++
+    } catch (error) {
+      // One failing comment is retried on the next rescan and must not hide the rest.
+      console.warn(`Rescan failed for ${c.id}: ${errorText(error)}`)
+    }
   }
   return { scanned: comments.length, processed }
 }
 
-/** getComments only lists top-level comments; replies hang off each comment's `replies` listing. */
-async function withReplies(roots: Comment[], maxDepth: number): Promise<Comment[]> {
-  const all: Comment[] = []
-  let level = roots
-  for (let depth = 0; level.length > 0; depth++) {
-    all.push(...level)
-    if (depth >= maxDepth) break
-    const next: Comment[] = []
-    for (const comment of level) next.push(...(await comment.replies.all()))
-    level = next
+/**
+ * A trade is settled once its confirmation is committed and the confirming reply has been fully
+ * handled; the rescan then has nothing left to recover under it, so its replies need not be fetched.
+ */
+async function isSettledTrade(ctx: TriggerContext, rootCommentId: string): Promise<boolean> {
+  const claim = await ctx.redis.get(`confirmed:${rootCommentId}`)
+  if (!claim) return false
+  try {
+    const { commentId } = JSON.parse(claim) as Partial<ConfirmationClaimRecord>
+    return !!commentId && !!(await ctx.redis.get(`processed:${commentId}`))
+  } catch {
+    return false
   }
-  return all
 }
 
 async function fetchComment(ctx: TriggerContext, fullName: string): Promise<FetchedComment | null> {
@@ -352,14 +351,6 @@ async function fetchComment(ctx: TriggerContext, fullName: string): Promise<Fetc
     body: c.body ?? '',
     permalink: c.permalink,
   }
-}
-
-function shouldFetchGrandparent(
-  comment: ProcessableComment,
-  parent: FetchedComment | null,
-  approvalKeyword: string,
-): parent is NonNullable<typeof parent> {
-  return !!parent && !parent.isRoot && comment.body.toLowerCase().includes(approvalKeyword.toLowerCase())
 }
 
 async function getTemplate(ctx: TriggerContext, name: string): Promise<string> {
@@ -456,7 +447,7 @@ async function completeConfirmation(
       old_parent_flair: parentResult.oldFlair ?? 'unknown',
       new_parent_flair: parentResult.newFlair ?? 'unknown',
     })
-    await trySubmitCommentWithRetry(ctx, replyTo, replyBody)
+    await submitCommentWithRetry(ctx, replyTo, replyBody)
   }
   console.debug(
     `Confirmed ${result.parentCommentId}: u/${result.parentAuthor} ${parentResult.oldFlair ?? 'none'} -> ` +
@@ -624,7 +615,7 @@ async function applyCommittedFlairWithLock(
     if (!tpl) return { ...participant, oldFlair, newFlair: null }
 
     const newFlair = formatFlairFromTemplate(tpl.template, participant.newCount, flairCountLabel)
-    const applied = await trySetUserFlairWithFallback(
+    await setUserFlairWithFallback(
       ctx,
       {
         subredditName,
@@ -634,7 +625,6 @@ async function applyCommittedFlairWithLock(
       },
       `set flair for u/${participant.username}`,
     )
-    if (!applied) return { ...participant, oldFlair, newFlair: null }
 
     return { ...participant, oldFlair, newFlair }
   })
@@ -670,10 +660,4 @@ function uniqueParticipants(participants: ConfirmationParticipant[]): Confirmati
     seen.add(participant.usernameLower)
     return true
   })
-}
-
-function parseStoredCount(value: string | undefined): number | null {
-  if (value === undefined) return null
-  const parsed = parseInt(value, 10)
-  return Number.isFinite(parsed) ? parsed : null
 }

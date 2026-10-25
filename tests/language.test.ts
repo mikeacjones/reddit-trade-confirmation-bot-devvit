@@ -26,14 +26,12 @@ describe('getLanguageSettings', () => {
   it('returns overrides when settings are populated', async () => {
     const ctx = mockSettings({
       confirmation_keyword: 'confirmado',
-      approval_keyword: 'aprobado',
       flair_count_label: 'Negocios:',
       moderator_flair_prefix: 'Moderador',
       date_locale: 'es-ES',
     })
     expect(await getLanguageSettings(ctx)).toEqual({
       confirmationKeyword: 'confirmado',
-      approvalKeyword: 'aprobado',
       flairCountLabel: 'Negocios:',
       moderatorFlairPrefix: 'Moderador',
       dateLocale: 'es-ES',

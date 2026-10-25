@@ -3,7 +3,7 @@ import type { TriggerContext } from '@devvit/public-api'
 import { getLanguageSettings } from './language.js'
 import { redditApiCall } from './redditApi.js'
 import { parseTradeCount } from './rules.js'
-import { errorText } from './utils.js'
+import { errorText, parseStoredCount } from './utils.js'
 
 export const MOD_NEW_POST_DISCORD_WEBHOOK_SETTING = 'mod_new_post_discord_webhook'
 export const MOD_NEW_POST_DISCORD_INCLUDE_JSON_SETTING = 'mod_new_post_discord_include_json'
@@ -174,8 +174,7 @@ export async function loadAuthorProfile(
 
   try {
     const stored = await ctx.redis.get(`confirmations:${username.toLowerCase()}`)
-    const parsed = stored === undefined ? NaN : parseInt(stored, 10)
-    if (Number.isFinite(parsed)) profile.tradeCount = parsed
+    profile.tradeCount = parseStoredCount(stored)
   } catch (error) {
     console.debug(`Could not read stored trade count for u/${username}: ${errorText(error)}`)
   }

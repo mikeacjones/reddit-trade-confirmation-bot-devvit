@@ -8,6 +8,7 @@ import { getLanguageSettings } from './language.js'
 import { isUserModerator } from './moderators.js'
 import { redditApiCall, type RedditApiContext } from './redditApi.js'
 import { withUserFlairLock } from './userFlairState.js'
+import { parseStoredCount } from './utils.js'
 
 const REDDIT_USERNAME_PATTERN = /^[A-Za-z0-9_-]{3,20}$/
 
@@ -65,10 +66,4 @@ export async function adjustUserTradeCount(
 
 function normalizeUsername(username: string): string {
   return username.trim().replace(/^\/?u\//i, '').replace(/^@/, '')
-}
-
-function parseStoredCount(value: string | undefined): number | null {
-  if (value === undefined) return null
-  const parsed = parseInt(value, 10)
-  return Number.isFinite(parsed) ? parsed : null
 }
