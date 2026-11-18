@@ -15,8 +15,8 @@ There are two kinds of tests:
 
 `@devvit/test` 0.15.4 (a devDependency pinned to the same version as `@devvit/public-api`) **can**
 drive this Blocks app end to end for everything except the Reddit API. The one thing it cannot do
-is act as the Reddit API for this app, so that side is a small in-repo fake. A real Redis is not
-needed for the current scenarios.
+is act as the Reddit API for this app, so that side is a small in-repo fake. A real Redis is needed only
+for the race scenarios.
 
 Why it works: `@devvit/test/server/vitest` exports `createDevvitTest`, which installs the Devvit
 global (`globalThis.devvit`) per test and wires mock plugins for Redis, settings, scheduler, media,
@@ -69,11 +69,55 @@ scenario tests use. Two gaps, pinned by `tests/harness/redisFidelity.test.ts`:
 - A `SET … NX` that fails inside `EXEC` yields `''` where real Devvit Redis yields `null`;
   `commitConfirmation` treats only `null`/`false` as a lost claim.
 
-Scenarios that depend on either need a real Redis behind a thin adapter that implements the same
-`ctx.redis` surface (Docker service container in CI, a local `redis-server` on a dev machine). That
-adapter is **not built yet**: no scenario needs it, and the two characterisation tests will fail
-when `@devvit/test` closes the gaps, which is the signal to revisit this section. The first bead
-that needs concurrent-commit semantics should build it under `tests/harness/`.
+Scenarios that depend on either need a real Redis, which the race scenarios get through the adapter
+described next.
+
+### Race scenarios and the real-Redis adapter
+
+`tests/harness/redisAdapter.ts` backs the same `ctx.redis` with a real Redis when `REDIS_URL` is set.
+`instrumentRedis(mocks)` patches the plugin that the `@devvit/public-api` Redis client already talks to
+(the one `createDevvitTest` installed), so the real client code runs unchanged:
+
+- Plain commands go to the real server. Keys keep the mock's per-test random prefix and `scenarioTest`
+  clears only that prefix after each test, so parallel test files can share one server.
+- `watch`/`multi`/`exec` are real: every transaction gets its own connection (WATCH is per connection),
+  an `exec` whose watched key changed is discarded and answers `[]`, and a failed `SET … NX` inside an
+  `exec` answers `null`. Only `set`, `get` and `del` can be queued in a transaction, which is all `src/`
+  uses. `unwatch()` ends the transaction.
+- With `REDIS_URL` unset, nothing changes: the RedisMock stays the backend, and scenarios that need the
+  real one are skipped (the skipped block's name says "needs a real Redis: set REDIS_URL").
+
+Interleavings are controlled by hooks, never by timers. `redis.pause(redisCall('Exec'))` holds the first
+matching Redis call (method plus optional first key: `Watch`, `Get`, `Set`, `Exec`, …) until
+`pause.resume()`; `redis.before(match, run, { once })` runs code, such as a competing write, right before
+a matching call. The pattern is: start flow A without awaiting it, `await pause.reached`, run flow B to
+completion, `resume()`, await A. `tests/scenarios/confirmationRaces.test.ts` uses it to probe
+`commitConfirmation`; `tests/harness/redisAdapter.test.ts` tests the adapter itself.
+
+Run them locally with a throwaway Redis:
+
+```sh
+docker run --rm -d --name swapbot-redis -p 6379:6379 redis:7
+REDIS_URL=redis://localhost:6379 npm test
+docker stop swapbot-redis
+```
+
+(`redis-server` from a package manager works the same: point `REDIS_URL` at it.) In CI, the `devvit-test`
+job needs a Redis service container and the variable:
+
+```yaml
+    services:
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      REDIS_URL: redis://localhost:6379
+```
+
+Probes that found a bug are kept as `it.fails`/`test.fails` repros with a `// BUG: …, severity …`
+comment, so the suite stays green and flips red when the bug is fixed.
 
 ## Writing a scenario
 
