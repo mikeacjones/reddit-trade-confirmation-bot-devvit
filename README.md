@@ -152,6 +152,24 @@ The following domains are requested for this app:
 
 - `discord.com` — Used to POST new-post notifications to Discord channel webhooks configured per subreddit install.
 
+## Running the tests
+
+```sh
+npm ci
+npm test               # every test: unit tests and the scenario suite
+npm run test:coverage  # the same, with a coverage report (what CI runs)
+npm run typecheck      # type-checks src/ and tests/
+```
+
+The scenario suite lives in `tests/scenarios/`. It runs the app registered in `src/main.ts` the way Devvit does (triggers, scheduler jobs, menu items and forms) against the in-memory mocks from `@devvit/test` and a small in-repo fake of the Reddit API. There is **no Redis prerequisite**: no Redis server, Docker or network access is needed, only `npm ci`. To run just the scenarios, or one file:
+
+```sh
+npx vitest run tests/scenarios
+npx vitest run tests/scenarios/confirmations.test.ts
+```
+
+The `devvit-test` GitHub Actions workflow runs `npm run test:coverage` on every pull request, scenarios included, and fails if any test fails. See [`docs/testing.md`](./docs/testing.md) for how the harness works.
+
 ## Legal
 
 HTTP fetch requires app-specific Terms and Privacy Policy links in Developer Settings (Reddit will not accept Reddit’s own policies as substitutes). Source documents live in [`docs/`](./docs/).
