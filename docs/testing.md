@@ -50,7 +50,7 @@ Comments, flair, moderators, modmail and listings throw "not mocked", and it has
 submit or read comments, which the confirmation flow needs. So `ctx.reddit` is `FakeReddit`, one
 stateful fake shared by all scenarios. It holds users, posts, comments, flair templates, user flair,
 moderators and modmail, implements exactly the `ctx.reddit` calls `src/` makes, and exposes
-`failNext(method, error)` to inject API failures. Seed it with `addUser`, `addModerator`,
+`failNext(method, error)` to inject API failures; set `rejectUnknownTemplateIds` to make `setUserFlair` answer 404 for a deleted flair template id, as Reddit does. Seed it with `addUser`, `addModerator`,
 `addFlairTemplate`, `addPost`, `addComment`; inspect it with `repliesTo`, `commentsBy`, `flairOf`,
 `modmail`, `calls`. `seedSwapsWorld` in `tests/harness/scenario.ts` sets up the usual subreddit.
 When `src/` starts using another `ctx.reddit` method, add it to the fake (calling it before then

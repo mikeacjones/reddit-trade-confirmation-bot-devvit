@@ -117,6 +117,11 @@ export class FakeReddit {
   readonly modmail: ModmailRecord[] = []
   /** Every API call made, in order, for assertions on call patterns. */
   readonly calls: Array<{ method: ApiMethod; args: unknown[] }> = []
+  /**
+   * When true, `setUserFlair` answers `404 flair template <id> not found` for a `flairTemplateId` that
+   * is not (or no longer) one of `flairTemplates`, as Reddit does for a deleted template. Off by default.
+   */
+  rejectUnknownTemplateIds = false
 
   private readonly now: () => Date
   private nextId = 1
@@ -317,6 +322,10 @@ export class FakeReddit {
 
     setUserFlair: async (options: { subredditName: string; username: string; text?: string; flairTemplateId?: string }) => {
       this.enter('setUserFlair', [options])
+      if (this.rejectUnknownTemplateIds && options.flairTemplateId &&
+        !this.flairTemplates.some(t => t.id === options.flairTemplateId)) {
+        throw statusError(404, `flair template ${options.flairTemplateId} not found`)
+      }
       this.userFlair.set(options.username.toLowerCase(), {
         text: options.text ?? '',
         flairTemplateId: options.flairTemplateId,
