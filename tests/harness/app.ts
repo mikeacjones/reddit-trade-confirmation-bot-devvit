@@ -61,6 +61,12 @@ export interface AppHarness {
   effects: () => UiEffects
   /** Names of the jobs registered in src/main.ts, for assertions on what is wired up. */
   registered: () => { triggers: string[]; jobs: string[]; menuItems: string[] }
+  /**
+   * Where a menu item shows and who sees it, as registered. Reddit enforces `forUserType` before
+   * a press ever reaches the handler, so the harness cannot press as a non-moderator; a scenario
+   * asserts the registration instead.
+   */
+  menuItemInfo: (label: string) => { location: string | string[]; forUserType?: string }
 }
 
 export interface StartAppOptions {
@@ -158,5 +164,11 @@ export function startApp(options: StartAppOptions): AppHarness {
       jobs: [...registry.scheduledJobHandlers.keys()],
       menuItems: registry.menuItems.map(m => m.label),
     }),
+
+    menuItemInfo(label) {
+      const item = registry.menuItems.find(m => m.label === label)
+      if (!item) throw new Error(`No menu item labelled "${label}"`)
+      return { location: item.location, forUserType: item.forUserType }
+    },
   }
 }
