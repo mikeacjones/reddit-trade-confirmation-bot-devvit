@@ -11,13 +11,13 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@devvit/public-api": "0.15.0"
+    "@devvit/public-api": "0.15.4"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^5.0.3",
-    "devvit": "0.15.0",
+    "@vitest/coverage-v8": "^5.1.1",
+    "devvit": "0.15.4",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.3"
+    "vitest": "^5.1.1"
   },
   "license": "BSD-3-Clause"
 }
