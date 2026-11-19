@@ -772,8 +772,7 @@ describe('scheduler jobs registered more than once', () => {
     expect(jobTypes(app)).toEqual(['monthly-post', 'rescan-monthly-post'])
   })
 
-  // BUG: ensureJobsScheduled lists the jobs and then schedules the missing ones without any lock, so AppInstall and AppUpgrade handled at the same time both see none and register every job twice, severity low
-  test.fails('AppInstall and AppUpgrade handled at the same time leave one of each job', async ({ mocks }) => {
+  test('AppInstall and AppUpgrade handled at the same time leave one of each job', async ({ mocks }) => {
     const app = newApp(mocks)
     seedSwapsWorld(app)
 
@@ -805,8 +804,7 @@ describe('scheduler jobs registered more than once', () => {
     expect(jobTypes(app)).toEqual(['monthly-post', 'rescan-monthly-post'])
   })
 
-  // BUG: ensureJobsScheduled matches on the job name only, so a pending one-off monthly-post run (from "Trigger monthly post now") makes it skip the recurring monthly cron and the monthly rotation is never scheduled, severity medium
-  test.fails('a pending one-off monthly-post run does not stop the recurring monthly job from being scheduled', async ({ mocks }) => {
+  test('a pending one-off monthly-post run does not stop the recurring monthly job from being scheduled', async ({ mocks }) => {
     const app = newApp(mocks)
     seedSwapsWorld(app)
     await app.pressMenuItem('Trigger monthly post now')
