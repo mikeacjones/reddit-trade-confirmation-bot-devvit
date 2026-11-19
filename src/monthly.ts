@@ -1,6 +1,7 @@
 import type { JobContext, ScheduledJobEvent } from '@devvit/public-api'
 import { defaults } from './defaults/index.js'
 import { getLanguageSettings } from './language.js'
+import { recordPreviousMonthlyPost } from './previousThread.js'
 import { redditApiCall } from './redditApi.js'
 import { render, renderTitle } from './templates.js'
 import { errorText, expirationFromNow } from './utils.js'
@@ -99,6 +100,7 @@ async function createOrRefreshMonthlyPost(
 
   const existing = botUser ? await findExistingPostForMonth(ctx, subredditName, now, botUser.username, title) : null
   if (existing) {
+    await openGraceWindow(ctx, previousId, previousPost, existing.id)
     await lockPreviousMonthlyPost(ctx, previousPost, existing.id)
     if (await tryReuseExistingMonthlyPost(ctx, subredditName, existing)) {
       // Without a record the thread was not made by this rotation logic (older version or by hand),
@@ -125,11 +127,27 @@ async function createOrRefreshMonthlyPost(
   })
   // Point at the new thread before the fallible follow-up calls; otherwise a failure there leaves
   // the pointer on the locked old thread and replies to the new one are rejected for good.
+  await openGraceWindow(ctx, previousId, previousPost, post.id)
   await ctx.redis.set('currentMonthlyPost', post.id)
   await setSortStep(ctx, rotationKey, rotation, post)
   await lockPreviousMonthlyPost(ctx, previousPost, post.id)
   await redditApiCall(ctx, () => post.sticky(), `sticky monthly post ${post.id}`)
   await sendModmailStep(ctx, rotationKey, rotation, subredditName, post)
+}
+
+/**
+ * Gives confirmations on the thread being rotated out a grace window that runs from the moment it is
+ * locked, however late a retry of a failed rotation does that. A thread that is already locked keeps
+ * the window recorded when it was locked, so repeating a finished rotation does not extend it.
+ */
+async function openGraceWindow(
+  ctx: JobContext,
+  previousId: string | null,
+  previousPost: PreviousMonthlyPost | null,
+  newPostId: string,
+): Promise<void> {
+  if (!previousId || previousId === newPostId) return
+  await recordPreviousMonthlyPost(ctx, previousId, { restart: previousPost?.locked !== true })
 }
 
 /** Finish the steps a retry finds outstanding for a thread that already exists (sticky is done by the caller). */
