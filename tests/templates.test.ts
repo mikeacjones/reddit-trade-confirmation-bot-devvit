@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { render, renderTitle } from '../src/templates'
 
 describe('render', () => {
@@ -64,5 +64,21 @@ describe('renderTitle', () => {
 
   it('falls back to en-US when no locale is given', () => {
     expect(renderTitle('%B', date)).toBe('January')
+  })
+
+  it('reads a locale written with an underscore as its hyphenated form', () => {
+    expect(renderTitle('%B', date, 'es_ES')).toBe('enero')
+    expect(renderTitle('%B', date, 'en_US')).toBe('January')
+  })
+
+  it('falls back to the default locale and logs when the locale is wholly invalid', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(renderTitle('%B %Y', date, 'not a locale!!')).toBe('January 2025')
+      expect(renderTitle('%b', date, '')).toBe('Jan')
+      expect(warn).toHaveBeenCalledTimes(2)
+    } finally {
+      warn.mockRestore()
+    }
   })
 })
