@@ -108,7 +108,10 @@ export function evaluateConfirmation(
 ): ValidationResult {
   if (comment.isRoot) return { valid: false }
 
-  if (!ctx.isCurrentSubmission) return { valid: false, reason: 'old_confirmation_thread' }
+  const hasKeyword = comment.body.toLowerCase().includes(confirmationKeyword.toLowerCase())
+
+  // Ordinary chatter on an older thread gets no reply; only a comment that looks like a confirmation does.
+  if (!ctx.isCurrentSubmission) return hasKeyword ? { valid: false, reason: 'old_confirmation_thread' } : { valid: false }
   if (!ctx.parentExists || ctx.parentIsBanned) return { valid: false }
   if (!ctx.parentIsProcessable) return { valid: false }
   if (!isTrader(comment.authorName, ctx.appUsername)) return { valid: false }
@@ -117,7 +120,7 @@ export function evaluateConfirmation(
 
   // Only a direct reply to a top-level trade comment can confirm it.
   if (!ctx.parentIsRoot) return { valid: false }
-  if (!comment.body.toLowerCase().includes(confirmationKeyword.toLowerCase())) return { valid: false }
+  if (!hasKeyword) return { valid: false }
 
   if (!isUsernameMentioned(ctx.parentBody, comment.authorName)) {
     return {

@@ -206,9 +206,13 @@ describe('evaluateConfirmation: who may confirm', () => {
     })
   })
 
-  it('on an old thread answers with the old-thread reason before looking at the tag or keyword', () => {
+  it('on an old thread answers a keyword comment with the old-thread reason before looking at the tag', () => {
     expect(confirm('confirmed', { isCurrentSubmission: false }).reason).toBe('old_confirmation_thread')
     expect(confirm('confirmed', { isCurrentSubmission: false }, 'carol').reason).toBe('old_confirmation_thread')
+  })
+
+  it('on an old thread stays silent for a comment without the keyword', () => {
+    expect(confirm('thanks, shipped it', { isCurrentSubmission: false })).toEqual({ valid: false })
   })
 
   it('does not confirm for a moderator differently from anyone else', () => {

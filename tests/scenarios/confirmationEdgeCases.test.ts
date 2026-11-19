@@ -609,8 +609,7 @@ describe('locked, older and unknown threads', () => {
     expect(app.reddit.repliesTo('t1_oldreply')).toEqual([])
   })
 
-  // BUG: on an older unlocked thread the bot answers every non-top-level comment with the old-thread reply, even chatter with no confirmation keyword and no connection to a trade, severity medium
-  test.fails('chatter without the keyword on an older thread gets no old-thread reply', async ({ mocks }) => {
+  test('chatter without the keyword on an older thread gets no old-thread reply', async ({ mocks }) => {
     const app = await setup(mocks)
     app.reddit.addPost({ id: 't3_old', title: 'Last month' })
     app.reddit.addComment({ id: 't1_oldoffer', parentId: 't3_old', postId: 't3_old', authorName: 'alice', body: 'Sold a kit to u/bob' })
