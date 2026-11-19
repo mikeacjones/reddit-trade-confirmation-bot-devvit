@@ -439,8 +439,7 @@ describe('deleted or removed comments and accounts', () => {
     await expectNoTradeRecorded(app)
   })
 
-  // BUG: a trade comment from a deleted or suspended account whose text is intact (author "[deleted]") is confirmable, so a trade is counted and a flair is written for the shared "[deleted]" pseudo-user, severity medium
-  test.fails('a trade comment whose author shows as [deleted] but whose text is intact is not confirmable', async ({ mocks }) => {
+  test('a trade comment whose author shows as [deleted] but whose text is intact is not confirmable', async ({ mocks }) => {
     const app = await setup(mocks, 'Sold a kit to u/bob', '[deleted]')
 
     await reply(app, 't1_reply', 't1_offer', 'bob', 'confirmed')
@@ -450,8 +449,7 @@ describe('deleted or removed comments and accounts', () => {
     expect(app.reddit.flairOf('[deleted]')).toBeUndefined()
   })
 
-  // BUG: a confirmation event with no author (deleted account) is valid when the trade comment holds a bare "u/" followed by a non-word character, so the trade counts for the trade comment author and a nameless user, severity high
-  test.fails('a confirmation with no author never counts a trade', async ({ mocks }) => {
+  test('a confirmation with no author never counts a trade', async ({ mocks }) => {
     const app = await setup(mocks, 'Sold a kit to u/ bob')
     app.reddit.addComment({ id: 't1_reply', parentId: 't1_offer', postId: MONTHLY, authorName: '', body: 'confirmed' })
 
@@ -530,8 +528,7 @@ describe('the parent author is the bot or a moderator', () => {
     expect(botComments(app)).toHaveLength(1)
   })
 
-  // BUG: a trade comment authored by the bot itself can be confirmed, so the bot account is counted and flaired as a trader, severity low
-  test.fails('a trade comment authored by the bot is not confirmable', async ({ mocks }) => {
+  test('a trade comment authored by the bot is not confirmable', async ({ mocks }) => {
     const app = await setup(mocks, 'Sold a kit to u/bob', 'swapbot')
 
     await reply(app, 't1_reply', 't1_offer', 'bob', 'confirmed')
@@ -598,8 +595,7 @@ describe('locked, older and unknown threads', () => {
     expect(app.reddit.repliesTo('t1_chat')).toEqual([])
   })
 
-  // BUG: the bot has no guard against its own comments: its old-thread reply is itself a non-top-level comment on an old thread, so if Reddit delivers the app's own comments the bot answers itself without end, severity medium
-  test.fails('the bot does not answer its own old-thread reply', async ({ mocks }) => {
+  test('the bot does not answer its own old-thread reply', async ({ mocks }) => {
     const app = await setup(mocks)
     app.reddit.addPost({ id: 't3_old', title: 'Last month' })
     app.reddit.addComment({ id: 't1_oldoffer', parentId: 't3_old', postId: 't3_old', authorName: 'alice', body: 'Sold a kit to u/bob' })
@@ -761,8 +757,7 @@ describe('moderator approval (Approve trade confirmation)', () => {
     await expectNoTradeRecorded(app)
   })
 
-  // BUG: approving a reply whose author shows as [deleted] counts the trade and writes a flair for the shared "[deleted]" pseudo-user, because only an empty author name is treated as unprocessable, severity medium
-  test.fails('a reply from a deleted account ([deleted]) cannot be approved', async ({ mocks }) => {
+  test('a reply from a deleted account ([deleted]) cannot be approved', async ({ mocks }) => {
     const app = await setup(mocks, 'Sold a kit')
     app.reddit.addComment({ id: 't1_reply', parentId: 't1_offer', postId: MONTHLY, authorName: '[deleted]', body: '[deleted]' })
 
@@ -773,8 +768,7 @@ describe('moderator approval (Approve trade confirmation)', () => {
     expect(app.reddit.flairOf('[deleted]')).toBeUndefined()
   })
 
-  // BUG: approving a reply to a trade comment whose author shows as [deleted] counts the trade for the shared "[deleted]" pseudo-user, severity medium
-  test.fails('a reply to a trade comment from a deleted account ([deleted]) cannot be approved', async ({ mocks }) => {
+  test('a reply to a trade comment from a deleted account ([deleted]) cannot be approved', async ({ mocks }) => {
     const app = await setup(mocks, 'Sold a kit to u/bob', '[deleted]')
     app.reddit.addComment({ id: 't1_reply', parentId: 't1_offer', postId: MONTHLY, authorName: 'bob', body: 'confirmed' })
 

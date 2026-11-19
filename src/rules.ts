@@ -51,7 +51,20 @@ export function findFlairTemplate(
   return null
 }
 
+/**
+ * Whether an account name belongs to a real trader. An empty or missing name, Reddit's shared
+ * "[deleted]" pseudo-user and the app's own account (compared case-insensitively) are not traders:
+ * a trade must never be counted, flaired or answered for them.
+ */
+export function isTrader(username: string | null | undefined, appUsername?: string | null): boolean {
+  const name = username?.trim().toLowerCase()
+  if (!name || name === '[deleted]') return false
+  if (appUsername && name === appUsername.trim().toLowerCase()) return false
+  return true
+}
+
 export function isUsernameMentioned(parentBody: string, username: string): boolean {
+  if (!username) return false
   const cleaned = parentBody.replace(/\\/g, '')
   // Usernames may contain hyphens, so \b alone would let "alex" match "u/alex-trader".
   const pattern = new RegExp(`(?:^|[^\\w/])/?u/${escape(username)}(?![\\w-])`, 'i')
@@ -74,6 +87,8 @@ export interface ConfirmationContext {
   parentIsRoot: boolean
   parentBody: string
   isCurrentSubmission: boolean
+  /** The app's own account, which is never a trader. */
+  appUsername?: string
 }
 
 export interface ValidationResult {
@@ -96,6 +111,8 @@ export function evaluateConfirmation(
   if (!ctx.isCurrentSubmission) return { valid: false, reason: 'old_confirmation_thread' }
   if (!ctx.parentExists || ctx.parentIsBanned) return { valid: false }
   if (!ctx.parentIsProcessable) return { valid: false }
+  if (!isTrader(comment.authorName, ctx.appUsername)) return { valid: false }
+  if (!isTrader(ctx.parentAuthorName, ctx.appUsername)) return { valid: false }
   if (ctx.parentAuthorName === comment.authorName) return { valid: false }
 
   // Only a direct reply to a top-level trade comment can confirm it.

@@ -3,6 +3,7 @@ import type { Comment, TriggerContext } from '@devvit/public-api'
 import {
   evaluateConfirmation,
   findFlairTemplate,
+  isTrader,
   formatFlairFromTemplate,
   type FlairTemplate,
   type ValidationResult,
@@ -153,6 +154,11 @@ async function processCommentOnce(
   const submission = await redditApiCall(ctx, () => ctx.reddit.getPostById(comment.postId as `t3_${string}`), `get post ${comment.postId}`)
   const botUser = await redditApiCall(ctx, () => ctx.reddit.getAppUser(), 'get app user')
   if (!botUser) return true
+  if (!isTrader(comment.author, botUser.username)) {
+    // The app's own comments (its replies included) and nameless or [deleted] authors are never answered.
+    console.debug(`Skipping ${comment.id}: author is not a trader`)
+    return true
+  }
   if (submission.authorId !== botUser.id) return true
   if (submission.locked) return true
 
@@ -170,12 +176,13 @@ async function processCommentOnce(
     {
       parentExists: !!parent,
       parentIsBanned: parent?.removed ?? false,
-      parentIsProcessable: parent ? !!parent.authorName : false,
+      parentIsProcessable: parent ? isTrader(parent.authorName, botUser.username) : false,
       parentAuthorName: parent?.authorName ?? '',
       parentId: parent?.id ?? '',
       parentIsRoot: parent?.isRoot ?? false,
       parentBody: parent?.body ?? '',
       isCurrentSubmission: isCurrent,
+      appUsername: botUser.username,
     },
     language.confirmationKeyword,
   )
@@ -230,7 +237,11 @@ export async function approveConfirmationFromComment(
   if (!parent.isRoot) {
     return { approved: false, message: 'Select a direct reply to a trade comment' }
   }
-  if (!parent.authorName || parent.removed) {
+  const botUser = await redditApiCall(ctx, () => ctx.reddit.getAppUser(), 'get app user')
+  if (!isTrader(target.authorName, botUser?.username)) {
+    return { approved: false, message: 'Selected comment has no processable author' }
+  }
+  if (!isTrader(parent.authorName, botUser?.username) || parent.removed) {
     return { approved: false, message: 'Parent trade comment cannot be confirmed' }
   }
   if (parent.authorName.toLowerCase() === target.authorName.toLowerCase()) {
@@ -238,7 +249,6 @@ export async function approveConfirmationFromComment(
   }
 
   const submission = await redditApiCall(ctx, () => ctx.reddit.getPostById(target.postId as `t3_${string}`), `get post ${target.postId}`)
-  const botUser = await redditApiCall(ctx, () => ctx.reddit.getAppUser(), 'get app user')
   if (!botUser || submission.authorId !== botUser.id) {
     return { approved: false, message: 'Selected comment is not on a bot confirmation thread' }
   }
