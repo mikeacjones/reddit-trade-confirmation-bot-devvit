@@ -153,7 +153,10 @@ async function tryReuseExistingMonthlyPost(
     console.debug(`Monthly post already exists for r/${subredditName}: ${existing.id}`)
     return true
   } catch (error) {
-    if (!isUnusablePostError(error)) throw error
+    // A 400 from sticky() means the sticky slots are full, not that the post is gone. Replacing the
+    // thread would split the month's confirmations across two threads, so only a post that is really
+    // gone may be replaced; anything else fails loudly and the next run retries the sticky.
+    if (!isGonePostError(error)) throw error
     console.warn(`Existing monthly post ${existing.id} could not be reused: ${errorText(error)}`)
     return false
   }
@@ -200,6 +203,14 @@ function isUsableMonthlyPost(post: Pick<PreviousMonthlyPost, 'removed' | 'spam' 
 function isUnusablePostError(error: unknown): boolean {
   const text = errorText(error)
   return /\b(400|404)\b/.test(text) || /bad request|not found|deleted|removed/i.test(text)
+}
+
+function isGonePostError(error: unknown): boolean {
+  const text = errorText(error)
+  // A 400 is never "gone", whatever the message says about removed or deleted posts: it is what a
+  // full sticky slot returns, and replacing the thread then would split the month in two.
+  if (/\b400\b/.test(text)) return false
+  return /\b404\b/.test(text) || /not found|deleted|removed/i.test(text)
 }
 
 function monthlyPostClaimKey(subredditName: string, when: Date): string {

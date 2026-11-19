@@ -446,7 +446,7 @@ describe('onMonthlyPost', () => {
       spam: false,
       archived: false,
       sticky: vi.fn(async () => {
-        throw new Error('http status 400 Bad Request')
+        throw new Error('http status 404 Not Found')
       }),
       unsticky: vi.fn(async () => undefined),
       lock: vi.fn(async () => {
