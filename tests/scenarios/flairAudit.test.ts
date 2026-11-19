@@ -357,8 +357,7 @@ describe('a stale flair template cache', () => {
     expect(JSON.parse((await app.ctx.redis.get('flairTemplates:swaps:Trades%3A'))!)).toHaveLength(11)
   })
 
-  // BUG: when a cached template id has been deleted on Reddit, the 404 only triggers the text-only flaircsv fallback and the cache is not refreshed, so every flair for up to 12 hours loses its template while the toast reports success, severity medium
-  test.fails('recovers from a deleted cached template by refreshing the cache and using the new template', async ({ mocks }) => {
+  test('recovers from a deleted cached template by refreshing the cache and using the new template', async ({ mocks }) => {
     const app = await setup(mocks)
     app.reddit.rejectUnknownTemplateIds = true
     await setCount(app, 'alice', 5)
@@ -370,6 +369,33 @@ describe('a stale flair template cache', () => {
     expect(await setCount(app, 'bob', 7)).toEqual(['Set u/bob to 7 trades'])
 
     expect(app.reddit.flairOf('bob')).toEqual({ text: 'Trades: 7', flairTemplateId: 'recreated' })
+  })
+
+  test('refreshes the cache at most once when the template is truly gone, then writes text only', async ({ mocks }) => {
+    const app = await setup(mocks)
+    app.reddit.rejectUnknownTemplateIds = true
+    await setCount(app, 'alice', 5)
+    app.reddit.flairTemplates.shift()
+    const reads = () => app.reddit.calls.filter(c => c.method === 'getUserFlairTemplates').length
+    const before = reads()
+
+    expect(await setCount(app, 'bob', 7)).toEqual(['Set u/bob to 7 trades'])
+
+    expect(reads() - before).toBe(1)
+    expect(app.reddit.flairOf('bob')).toEqual({ text: 'Trades: 7', flairTemplateId: undefined })
+  })
+
+  test('a confirmation also recovers from a deleted cached template', async ({ mocks }) => {
+    const app = await setup(mocks)
+    app.reddit.rejectUnknownTemplateIds = true
+    await setCount(app, 'alice', 5)
+    app.reddit.flairTemplates.shift()
+    app.reddit.addFlairTemplate('Trades: 0-99', { id: 'recreated' })
+
+    await deliver(app, addTrade(app))
+
+    expect(app.reddit.flairOf('alice')).toEqual({ text: 'Trades: 6', flairTemplateId: 'recreated' })
+    expect(app.reddit.flairOf('bob')).toEqual({ text: 'Trades: 1', flairTemplateId: 'recreated' })
   })
 })
 

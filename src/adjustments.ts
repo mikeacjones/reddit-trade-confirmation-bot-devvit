@@ -53,6 +53,12 @@ export async function adjustUserTradeCount(
         ctx,
         { subredditName, username, text: newFlair, flairTemplateId: tpl.id },
         `set manual flair for u/${username}`,
+        async () => {
+          const fresh = findFlairTemplate(await refreshFlairTemplateCache(ctx, subredditName), count, isMod)
+          return fresh
+            ? { flairTemplateId: fresh.id, text: formatFlairFromTemplate(fresh.template, count, flairCountLabel) }
+            : null
+        },
       )
     } catch (error) {
       // The flair text already shows the new count, so undoing the count would split them.
