@@ -403,6 +403,9 @@ describe('rescan-monthly-post job', () => {
     expect(await app.ctx.redis.get('confirmations:alice')).toBe('1')
     expect(await app.ctx.redis.get('confirmations:bob')).toBe('1')
     expect(app.reddit.commentsBy('swapbot')).toHaveLength(1)
+    // The "finishes" half: the rescan set the flair the trigger could not, for both users.
+    expect(app.reddit.flairOf('alice')).toEqual({ text: 'Trades: 1', flairTemplateId: 'tpl-0' })
+    expect(app.reddit.flairOf('bob')).toEqual({ text: 'Trades: 1', flairTemplateId: 'tpl-0' })
   })
 
   test('counts two different trades in one rescan, each once, spacing the bot replies by the comment slot', async ({ mocks }) => {
