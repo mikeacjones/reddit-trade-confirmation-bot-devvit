@@ -241,28 +241,44 @@ Devvit.addMenuItem({
     }
     const { name } = await redditApiCall(ctx, () => ctx.reddit.getCurrentSubreddit(), 'get current subreddit')
     const { flairCountLabel, moderatorFlairPrefix } = await getLanguageSettings(ctx)
+    // Seeding creates the templates one by one and records flairs_seeded only at the end, so a
+    // failure part-way leaves the earlier templates on the subreddit. Read what is already there
+    // and create only the missing ones, so that a retry never duplicates templates.
+    const sub = await redditApiCall(ctx, () => ctx.reddit.getSubredditByName(name), `get subreddit ${name}`)
+    const existing = await redditApiCall(ctx, () => sub.getUserFlairTemplates(), `get flair templates for r/${name}`)
+    const exists = (text: string, modOnly: boolean) =>
+      existing.some(t => t.text === text && (t.modOnly ?? false) === modOnly)
+    let created = 0
     for (let i = 0; i < 10; i++) {
       const min = i * 100
       const max = i === 9 ? 99999 : min + 99
       const bg = randomHex()
       const text = `${flairCountLabel} ${min}-${max}`
+      if (exists(text, false)) continue
       await redditApiCall(ctx, () => ctx.reddit.createUserFlairTemplate({
         subredditName: name,
         text,
         backgroundColor: bg,
         textColor: pickTextColor(bg),
       }), `create flair template ${text}`)
+      created++
     }
-    await redditApiCall(ctx, () => ctx.reddit.createUserFlairTemplate({
-      subredditName: name,
-      text: `${moderatorFlairPrefix} | ${flairCountLabel} 0-99999`,
-      backgroundColor: '#46d160',
-      textColor: 'dark',
-      modOnly: true,
-    }), 'create moderator flair template')
+    const moderatorText = `${moderatorFlairPrefix} | ${flairCountLabel} 0-99999`
+    if (!exists(moderatorText, true)) {
+      await redditApiCall(ctx, () => ctx.reddit.createUserFlairTemplate({
+        subredditName: name,
+        text: moderatorText,
+        backgroundColor: '#46d160',
+        textColor: 'dark',
+        modOnly: true,
+      }), 'create moderator flair template')
+      created++
+    }
     await refreshFlairTemplateCache(ctx, name)
     await ctx.redis.set('flairs_seeded', '1')
-    ctx.ui.showToast('Created 11 user flair templates')
+    ctx.ui.showToast(created === 11
+      ? 'Created 11 user flair templates'
+      : `Created ${created} user flair templates (${11 - created} already existed)`)
   },
 })
 

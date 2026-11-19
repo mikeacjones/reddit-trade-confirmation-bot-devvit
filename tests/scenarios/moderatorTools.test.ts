@@ -542,8 +542,7 @@ describe('Set up default user flairs', () => {
     expect(app.reddit.flairTemplates).toHaveLength(11)
   })
 
-  // BUG: the flairs_seeded flag is only set after all eleven templates exist, so a failure part-way leaves the first templates on Reddit and pressing the menu item again creates them a second time (duplicate flair templates), severity medium
-  test.fails('a failure part-way and a retry does not duplicate the templates already created', async ({ mocks }) => {
+  test('a failure part-way and a retry does not duplicate the templates already created', async ({ mocks }) => {
     const app = newApp(mocks)
     const create = app.reddit.client.createUserFlairTemplate
     let calls = 0
@@ -556,6 +555,23 @@ describe('Set up default user flairs', () => {
     await app.pressMenuItem('Set up default user flairs')
 
     expect(app.reddit.flairTemplates).toHaveLength(11)
+  })
+})
+
+describe('Set up default user flairs: existing templates', () => {
+  test('skips templates already on the subreddit and creates only the missing ones', async ({ mocks }) => {
+    const app = newApp(mocks)
+    app.reddit.addFlairTemplate('Trades: 0-99', { id: 'tpl-existing' })
+    // Same text but not mod-only: it does not stand in for the moderator template.
+    app.reddit.addFlairTemplate('Moderator | Trades: 0-99999')
+
+    const { toasts } = await app.pressMenuItem('Set up default user flairs')
+
+    expect(toasts).toEqual(['Created 10 user flair templates (1 already existed)'])
+    expect(app.reddit.flairTemplates).toHaveLength(12)
+    expect(app.reddit.flairTemplates.filter(t => t.text === 'Trades: 0-99')).toHaveLength(1)
+    expect(app.reddit.flairTemplates.filter(t => t.modOnly)).toHaveLength(1)
+    expect(await app.ctx.redis.get('flairs_seeded')).toBe('1')
   })
 })
 
