@@ -648,6 +648,19 @@ async function applyCommittedFlairWithLock(
         flairTemplateId: tpl.id,
       },
       `set flair for u/${participant.username}`,
+      async () => {
+        const fresh = findFlairTemplate(
+          await refreshFlairTemplateCache(ctx, subredditName),
+          participant.newCount,
+          participant.isModerator,
+        )
+        return fresh
+          ? {
+            flairTemplateId: fresh.id,
+            text: formatFlairFromTemplate(fresh.template, participant.newCount, flairCountLabel),
+          }
+          : null
+      },
     )
 
     return { ...participant, oldFlair, newFlair }
