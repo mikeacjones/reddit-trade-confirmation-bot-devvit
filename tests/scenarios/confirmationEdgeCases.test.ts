@@ -460,8 +460,7 @@ describe('deleted or removed comments and accounts', () => {
     expect(flairWrites(app)).toEqual([])
   })
 
-  // BUG: a confirmation comment that has been removed by the time it is processed (spam filter, moderator) still counts the trade, because the comment's own removed flag is never checked, severity medium
-  test.fails('a confirmation that was removed before processing does not count', async ({ mocks }) => {
+  test('a confirmation that was removed before processing does not count', async ({ mocks }) => {
     const app = await setup(mocks)
     app.reddit.addComment({ id: 't1_reply', parentId: 't1_offer', postId: MONTHLY, authorName: 'bob', body: 'confirmed', removed: true })
 
@@ -469,6 +468,32 @@ describe('deleted or removed comments and accounts', () => {
 
     expect(await count(app, 'alice')).toBeUndefined()
     expect(await count(app, 'bob')).toBeUndefined()
+  })
+
+  test('a removed confirmation is not answered, and counts once a moderator re-approves it before a rescan', async ({ mocks }) => {
+    const app = await setup(mocks)
+    app.reddit.addComment({ id: 't1_reply', parentId: 't1_offer', postId: MONTHLY, authorName: 'bob', body: 'confirmed', removed: true })
+
+    await app.fireTrigger('CommentSubmit', eventFor({ id: 't1_reply', body: 'confirmed', parentId: 't1_offer' }, 'bob'))
+    await app.runJob('rescan-monthly-post')
+
+    expect(app.reddit.repliesTo('t1_reply')).toEqual([])
+    expect(await count(app, 'alice')).toBeUndefined()
+
+    app.reddit.comments.get('t1_reply')!.removed = false
+    await app.runJob('rescan-monthly-post')
+
+    await expectTradeCounted(app)
+  })
+
+  test('a moderator can still approve a removed confirmation', async ({ mocks }) => {
+    const app = await setup(mocks)
+    app.reddit.addComment({ id: 't1_reply', parentId: 't1_offer', postId: MONTHLY, authorName: 'bob', body: 'confirmed', removed: true })
+
+    const toasts = (await app.pressMenuItem(APPROVE, { location: 'comment', targetId: 't1_reply' })).toasts
+
+    expect(toasts).toEqual(['Approved confirmation for u/alice and u/bob'])
+    await expectTradeCounted(app)
   })
 
   test('a confirmation deleted after it counted keeps its counts and is not answered twice by the rescan', async ({ mocks }) => {

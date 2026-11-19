@@ -43,6 +43,7 @@ interface FetchedComment {
   subredditName: string
   authorName: string
   removed: boolean
+  spam: boolean
   isRoot: boolean
   body: string
   permalink: string
@@ -161,6 +162,15 @@ async function processCommentOnce(
   }
   if (submission.authorId !== botUser.id) return true
   if (submission.locked) return true
+
+  // The spam filter or a moderator may have removed the confirmation before it was processed. It is
+  // left unprocessed and unanswered so that a moderator approving it later is still counted by the
+  // rescan; a manual approval is an explicit mod action and does not go through this check.
+  const self = await fetchComment(ctx, comment.id)
+  if (self?.removed || self?.spam) {
+    console.debug(`Skipping ${comment.id}: comment was removed before processing`)
+    return false
+  }
 
   const isCurrent = submission.id === (await ctx.redis.get('currentMonthlyPost'))
 
@@ -357,6 +367,7 @@ async function fetchComment(ctx: TriggerContext, fullName: string): Promise<Fetc
     subredditName: c.subredditName,
     authorName: c.authorName,
     removed: c.removed ?? false,
+    spam: c.spam ?? false,
     isRoot: c.parentId.startsWith('t3_'),
     body: c.body ?? '',
     permalink: c.permalink,
