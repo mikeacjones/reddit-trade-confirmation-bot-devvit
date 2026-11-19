@@ -4,6 +4,7 @@ import {
   formatFlairFromTemplate,
   findFlairTemplate,
   isUsernameMentioned,
+  isTrader,
   evaluateConfirmation,
   type ConfirmationContext,
   type CommentInput,
@@ -249,5 +250,60 @@ describe('evaluateConfirmation', () => {
       'Confirmado',
     )
     expect(r.valid).toBe(true)
+  })
+})
+
+describe('isTrader', () => {
+  it('refuses empty, undefined and [deleted] names', () => {
+    expect(isTrader('')).toBe(false)
+    expect(isTrader(undefined)).toBe(false)
+    expect(isTrader(null)).toBe(false)
+    expect(isTrader('[deleted]')).toBe(false)
+  })
+
+  it('refuses the app account in any case', () => {
+    expect(isTrader('SwapBot', 'swapbot')).toBe(false)
+    expect(isTrader('swapbot', 'SwapBot')).toBe(false)
+  })
+
+  it('accepts a real user', () => {
+    expect(isTrader('bob', 'swapbot')).toBe(true)
+    expect(isTrader('bob')).toBe(true)
+  })
+})
+
+describe('isUsernameMentioned with an empty username', () => {
+  it('never matches a bare u/', () => {
+    expect(isUsernameMentioned('Sold a kit to u/ bob', '')).toBe(false)
+    expect(isUsernameMentioned('u/', '')).toBe(false)
+  })
+})
+
+describe('evaluateConfirmation with non-trader accounts', () => {
+  const base: ConfirmationContext = {
+    parentExists: true,
+    parentIsBanned: false,
+    parentIsProcessable: true,
+    parentAuthorName: 'alice',
+    parentId: 't1_offer',
+    parentIsRoot: true,
+    parentBody: 'Sold to u/bob',
+    isCurrentSubmission: true,
+    appUsername: 'swapbot',
+  }
+  const reply: CommentInput = { id: 't1_r', body: 'confirmed', authorName: 'bob', isRoot: false }
+
+  it('accepts a normal confirmation', () => {
+    expect(evaluateConfirmation(reply, base).valid).toBe(true)
+  })
+
+  it('refuses a deleted or the app confirmer', () => {
+    expect(evaluateConfirmation({ ...reply, authorName: '[deleted]' }, { ...base, parentBody: 'u/[deleted]' }).valid).toBe(false)
+    expect(evaluateConfirmation({ ...reply, authorName: 'SwapBot' }, { ...base, parentBody: 'u/swapbot' }).valid).toBe(false)
+  })
+
+  it('refuses a deleted or the app trade author', () => {
+    expect(evaluateConfirmation(reply, { ...base, parentAuthorName: '[deleted]' }).valid).toBe(false)
+    expect(evaluateConfirmation(reply, { ...base, parentAuthorName: 'swapbot' }).valid).toBe(false)
   })
 })
