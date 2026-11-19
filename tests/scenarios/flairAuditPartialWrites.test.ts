@@ -2,8 +2,9 @@
  * Adversarial regression tests for flair writes that half-succeed (flaircsv fallback) and for a
  * confirmation replayed after a moderator corrected the count by hand.
  *
- * Both probes found bugs in src/ (this audit bead does not fix src/), so they are `test.fails`
- * repros with a `// BUG:` comment: they stay green now and turn red once the bug is fixed, then drop `.fails`.
+ * Both probes found bugs that are now fixed: manual adjustments take the flair lock and never undo a
+ * count that moved on or a flair text that was already written, and a confirmation's flair step only
+ * writes while the stored count is still the one it committed.
  */
 import { describe, expect, vi } from 'vitest'
 import { adjustUserTradeCount } from '../../src/adjustments.js'
@@ -24,8 +25,7 @@ async function setup(mocks: Parameters<typeof newApp>[0]): Promise<AppHarness> {
 }
 
 describe('flair writes that half-succeed', () => {
-  // BUG: setUserFlairWithFallback writes the new text through flaircsv and then a non-404 failure of the template retry propagates, so adjustUserTradeCount restores the old count while the flair keeps showing the new one, severity high
-  test.fails('a manual adjustment whose flaircsv text write succeeded but whose template retry then fails keeps count and flair in step', async ({ mocks }) => {
+  test('a manual adjustment whose flaircsv text write succeeded but whose template retry then fails keeps count and flair in step', async ({ mocks }) => {
     const app = await setup(mocks)
     await app.ctx.redis.set('confirmations:alice', '9')
     app.reddit.setFlair('alice', 'Trades: 9')
@@ -45,8 +45,7 @@ describe('flair writes that half-succeed', () => {
     expect(app.reddit.flairOf('alice')?.text).toBe(`Trades: ${stored}`)
   })
 
-  // BUG: applyCommittedFlairWithLock only skips a stale write when the stored count is greater than the committed one (`>`), so a rescan replay of a confirmation whose flair write failed overwrites a count a moderator then set lower by hand and flair and stored count disagree, severity high
-  test.fails('a confirmation whose flair write failed does not overwrite a count a moderator set by hand before the rescan', async ({ mocks }) => {
+  test('a confirmation whose flair write failed does not overwrite a count a moderator set by hand before the rescan', async ({ mocks }) => {
     const app = await setup(mocks)
     await app.ctx.redis.set('confirmations:alice', '10')
     await app.ctx.redis.set('confirmations:bob', '1')

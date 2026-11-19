@@ -604,7 +604,10 @@ async function applyCommittedFlairWithLock(
       flairTemplates,
       flairCountLabel,
     )
-    if (storedCount !== null && storedCount > participant.newCount) {
+    // The count moved after this confirmation committed: another confirmation (higher) or a
+    // moderator's manual set (any value, written under this lock together with its own flair).
+    // Either way the stored count's own writer owns the flair, so this stale write is skipped.
+    if (storedCount !== null && storedCount !== participant.newCount) {
       const committedNewFlair = await formatCommittedFlair(
         ctx,
         subredditName,
