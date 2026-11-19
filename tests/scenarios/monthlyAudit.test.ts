@@ -336,8 +336,7 @@ describe('sticky slots full and partial failures', () => {
     expect(stickied(app)).toEqual([december])
   })
 
-  // BUG: when the sticky slots are full the retry gets "400 bad request" from sticky(), isUnusablePostError treats that as "post unusable" and the job submits a second thread for the same month, severity high
-  test.fails('stickying keeps failing with a 400 (slots full): a retry does not create a second thread for the month', async ({ mocks }) => {
+  test('stickying keeps failing with a 400 (slots full): a retry does not create a second thread for the month', async ({ mocks }) => {
     const app = await setup(mocks)
     failStickyOnNewPosts(app, '400 bad request: too many sticky posts')
     vi.setSystemTime(new Date('2026-12-01T00:00:00Z'))
@@ -348,6 +347,34 @@ describe('sticky slots full and partial failures', () => {
 
     expect(submitted(app)).toBe(1)
   })
+
+  test('stickying keeps failing with a 400 (slots full): any number of retries leaves one thread, failing loudly each time', async ({ mocks }) => {
+    const app = await setup(mocks)
+    failStickyOnNewPosts(app, '400 bad request: too many sticky posts')
+    vi.setSystemTime(new Date('2026-12-01T00:00:00Z'))
+    await expect(app.runJob('monthly-post')).rejects.toThrow('400')
+    const december = await currentPostId(app)
+    for (let i = 0; i < 3; i++) {
+      await expect(app.runJob('monthly-post')).rejects.toThrow('400')
+    }
+    expect(submitted(app)).toBe(1)
+    expect(await currentPostId(app)).toBe(december)
+  })
+
+  for (const message of [
+    '400 Bad Request: no free sticky slot found',
+    'http status 400 Bad Request: both sticky slots are taken, unsticky or removed one first',
+    '400 bad request: a deleted or removed post cannot free a sticky slot',
+  ]) {
+    test(`a 400 from sticky() never makes the retry post a second thread, whatever it says: ${message}`, async ({ mocks }) => {
+      const app = await setup(mocks)
+      failStickyOnNewPosts(app, message)
+      vi.setSystemTime(new Date('2026-12-01T00:00:00Z'))
+      await expect(app.runJob('monthly-post')).rejects.toThrow('400')
+      for (let i = 0; i < 3; i++) await app.runJob('monthly-post').catch(() => {})
+      expect(submitted(app)).toBe(1)
+    })
+  }
 
   test('stickying keeps failing with a 500 (slots full): every retry fails loudly and none creates a second thread', async ({ mocks }) => {
     const app = await setup(mocks)
