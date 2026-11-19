@@ -142,6 +142,17 @@ Use `scenarioTest` (not plain `it`): it creates the per-test Devvit global and c
 each test. Examples: `tests/scenarios/commentSubmit.test.ts` (the confirmation flow) and
 `tests/scenarios/surfaces.test.ts` (install, jobs, menu items, forms, `PostSubmit`).
 
+Two things to know when a scenario needs more than the basic shape:
+
+- `test.for` / `test.each` do not hand the Devvit fixtures to the test body: `mocks` is `undefined`
+  inside them. A scenario that sets a setting with `mocks.settings.put` must expand its rows with a
+  plain `for` loop that calls `test(...)` once per row.
+- A flow that waits (a rate-limited reply sleeps 6.5 seconds for the comment slot, a rate limit sleeps
+  until the backoff ends) hangs under vitest fake timers unless the clock keeps moving.
+  `runWithClock(promise)` in `tests/harness/clock.ts` alternates real event-loop turns, which the
+  Redis mocks need, with small steps of the fake clock until the promise settles. Move the clock with
+  `advanceTimersByTimeAsync`, not `setSystemTime`: the Redis mock expires keys with timers.
+
 ## Limits
 
 - The Devvit runtime is not run: no real RPC, permissions (`forUserType: 'moderator'`), scopes or

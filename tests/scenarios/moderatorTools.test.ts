@@ -542,10 +542,8 @@ describe('Set up default user flairs', () => {
     expect(app.reddit.flairTemplates).toHaveLength(11)
   })
 
-  // Real bug, kept as a skipped guard (the fix belongs in src/main.ts, not in this bead): the
-  // flairs_seeded flag is only set after all eleven templates exist, so a failure part-way leaves
-  // the first templates on Reddit and a retry creates them again, duplicating them.
-  test.skip('a failure part-way and a retry does not duplicate the templates already created', async ({ mocks }) => {
+  // BUG: the flairs_seeded flag is only set after all eleven templates exist, so a failure part-way leaves the first templates on Reddit and pressing the menu item again creates them a second time (duplicate flair templates), severity medium
+  test.fails('a failure part-way and a retry does not duplicate the templates already created', async ({ mocks }) => {
     const app = newApp(mocks)
     const create = app.reddit.client.createUserFlairTemplate
     let calls = 0
