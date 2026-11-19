@@ -647,8 +647,7 @@ describe('setUserFlair failing', () => {
     expect(await count(app, 'alice')).toBeUndefined()
   })
 
-  // BUG: when the flair write fails, adjustUserTradeCount restores the count it read earlier, so a trade a confirmation committed in between is overwritten and lost, severity high
-  test.fails('does not roll back over a trade that was committed while the flair write was in flight', async ({ mocks }) => {
+  test('does not roll back over a trade that was committed while the flair write was in flight', async ({ mocks }) => {
     const app = await setup(mocks)
     await app.ctx.redis.set('confirmations:alice', '9')
     const original = app.reddit.client.setUserFlair
@@ -666,8 +665,7 @@ describe('setUserFlair failing', () => {
     expect(await count(app, 'alice')).toBe('121')
   })
 
-  // BUG: adjustUserTradeCount writes the count outside the flair lock and outside the confirmation's watched transaction, so a manual set that lands between a confirmation's commit and its flair write leaves the flair showing the confirmation's count while the stored count is the manual one, severity high
-  test.fails('keeps flair and stored count in step when a manual set lands between a confirmation commit and its flair write', async ({ mocks }) => {
+  test('keeps flair and stored count in step when a manual set lands between a confirmation commit and its flair write', async ({ mocks }) => {
     const app = await setup(mocks)
     await app.ctx.redis.set('confirmations:alice', '10')
     await app.ctx.redis.set('confirmations:bob', '1')

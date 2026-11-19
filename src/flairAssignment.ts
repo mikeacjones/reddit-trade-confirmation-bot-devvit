@@ -22,6 +22,18 @@ interface FlairCsvResult {
   }
 }
 
+/**
+ * Thrown when the flaircsv fallback already changed the user's flair text but the template retry
+ * then failed. The flair is no longer what it was before the call, so callers must not undo the
+ * state that the new text reflects. The message is the underlying error's.
+ */
+export class FlairTextWrittenError extends Error {
+  constructor(cause: unknown) {
+    super(errorText(cause), { cause })
+    this.name = 'FlairTextWrittenError'
+  }
+}
+
 export async function setUserFlairWithFallback(
   ctx: RedditApiContext,
   options: UserFlairAssignment,
@@ -54,7 +66,7 @@ export async function setUserFlairWithFallback(
       `${description} after flaircsv fallback`,
     )
   } catch (error) {
-    if (!isNotFoundError(error)) throw error
+    if (!isNotFoundError(error)) throw new FlairTextWrittenError(error)
 
     console.warn(
       `Reddit API still returned 404 during ${description} after flaircsv fallback; ` +
