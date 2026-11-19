@@ -432,7 +432,8 @@ describe('monthly rotation and the rescan together', () => {
     const december = await currentPostId(app)
     expect(december).not.toBe(MONTHLY)
 
-    vi.setSystemTime(new Date('2026-12-01T00:30:00Z'))
+    // Past the grace window in which the rescan still scans the old thread (see monthlyAudit.test.ts).
+    vi.setSystemTime(new Date('2026-12-01T07:00:00Z'))
     await app.runJob('rescan-monthly-post')
 
     // The missed confirmation sits in the old, now locked thread: it is not counted.

@@ -13,7 +13,7 @@ A Reddit Devvit app that tracks completed trades for swap subreddits. When two u
 - **Mod approvals.** A moderator can select a reply to a trade comment and choose **Approve trade confirmation** to count it manually. The reply doesn't need to contain the confirmation keyword or tag anyone.
 - **Manual adjustments.** Moderators can use **Set user trade count** to repair a user's count and apply the matching flair.
 - **Hourly rescan.** Every hour (at half past) the bot re-scans the current monthly thread and processes any confirmations it missed (for example, after Reddit API rate limiting). The same scan can be run on demand with **Re-scan monthly post comments**.
-- **Lock-down.** The previous monthly thread is locked as part of creating or refreshing the new monthly thread.
+- **Lock-down.** The previous monthly thread is locked as part of creating or refreshing the new monthly thread. For 6 hours after the rotation the hourly rescan and the comment trigger still count a confirmation that was posted on it before the lock but not yet processed; after that, confirmations on the old thread are ignored.
 - **Mod Discord notifications (optional).** If a Discord webhook URL is configured in app settings, every new post is forwarded to that channel with title, author, body, and a structured JSON payload for automation listeners.
 
 ## Installation

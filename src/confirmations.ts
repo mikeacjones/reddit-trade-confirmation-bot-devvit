@@ -15,6 +15,7 @@ import { setUserFlairWithFallback } from './flairAssignment.js'
 import { loadFlairTemplates, refreshFlairTemplateCache } from './flairCache.js'
 import { seedTradeCountFromFlair } from './migration.js'
 import { isUserModerator } from './moderators.js'
+import { getGracePreviousPostId } from './previousThread.js'
 import {
   redditApiCall,
   submitCommentWithRetry,
@@ -161,7 +162,10 @@ async function processCommentOnce(
     return true
   }
   if (submission.authorId !== botUser.id) return true
-  if (submission.locked) return true
+  // The thread just rotated out is locked but still accepts what was posted before the rotation.
+  const graceId = await getGracePreviousPostId(ctx)
+  const inGrace = graceId !== null && submission.id === graceId
+  if (submission.locked && !inGrace) return true
 
   // The spam filter or a moderator may have removed the confirmation before it was processed. It is
   // left unprocessed and unanswered so that a moderator approving it later is still counted by the
@@ -172,7 +176,7 @@ async function processCommentOnce(
     return false
   }
 
-  const isCurrent = submission.id === (await ctx.redis.get('currentMonthlyPost'))
+  const isCurrent = inGrace || submission.id === (await ctx.redis.get('currentMonthlyPost'))
 
   const parent = await fetchComment(ctx, comment.parentId)
 
@@ -310,18 +314,17 @@ export async function rescanCurrentMonthlyPost(ctx: TriggerContext): Promise<{ s
   const postId = await ctx.redis.get('currentMonthlyPost')
   if (!postId) return { scanned: 0, processed: 0 }
   const { name: subredditName } = await redditApiCall(ctx, () => ctx.reddit.getCurrentSubreddit(), 'get current subreddit')
-  const topLevel = await redditApiCall(ctx, () =>
-    ctx.reddit.getComments({ postId: postId as `t3_${string}`, limit: 1000, pageSize: 100 }).all(),
-  `get comments for ${postId}`)
-  const comments: Comment[] = [...topLevel]
-  for (const root of topLevel) {
-    if (await isSettledTrade(ctx, root.id)) continue
+  const comments: Comment[] = []
+  // A failure on the previous thread is retried by the next rescan and must not stop the current one.
+  const graceId = await getGracePreviousPostId(ctx)
+  if (graceId) {
     try {
-      comments.push(...await redditApiCall(ctx, () => root.replies.all(), `get replies for ${root.id}`))
+      comments.push(...await collectThreadComments(ctx, graceId))
     } catch (error) {
-      console.warn(`Rescan could not load replies for ${root.id}: ${errorText(error)}`)
+      console.warn(`Rescan could not load the previous thread ${graceId}: ${errorText(error)}`)
     }
   }
+  comments.push(...await collectThreadComments(ctx, postId))
   let processed = 0
   for (const c of comments) {
     try {
@@ -340,6 +343,22 @@ export async function rescanCurrentMonthlyPost(ctx: TriggerContext): Promise<{ s
     }
   }
   return { scanned: comments.length, processed }
+}
+
+async function collectThreadComments(ctx: TriggerContext, postId: string): Promise<Comment[]> {
+  const topLevel = await redditApiCall(ctx, () =>
+    ctx.reddit.getComments({ postId: postId as `t3_${string}`, limit: 1000, pageSize: 100 }).all(),
+  `get comments for ${postId}`)
+  const comments: Comment[] = [...topLevel]
+  for (const root of topLevel) {
+    if (await isSettledTrade(ctx, root.id)) continue
+    try {
+      comments.push(...await redditApiCall(ctx, () => root.replies.all(), `get replies for ${root.id}`))
+    } catch (error) {
+      console.warn(`Rescan could not load replies for ${root.id}: ${errorText(error)}`)
+    }
+  }
+  return comments
 }
 
 /**

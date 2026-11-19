@@ -594,14 +594,139 @@ describe('the rescan across the month boundary', () => {
     expect(app.reddit.repliesTo('t1_reply').length).toBeLessThanOrEqual(1)
   })
 
-  // BUG: a valid confirmation posted on the old thread seconds before rollover whose trigger had not run yet is neither counted nor answered, because the rotation locks the thread and the rescan only scans the new current thread, so the trade is lost with no reply to the users, severity medium
-  test.fails('a valid confirmation posted just before rollover is still counted or answered after the rotation', async ({ mocks }) => {
+  test('a valid confirmation posted just before rollover is still counted or answered after the rotation', async ({ mocks }) => {
     const app = await setup(mocks)
     vi.setSystemTime(new Date('2026-11-30T23:59:55Z'))
     tradeComments(app)
     vi.setSystemTime(new Date('2026-12-01T00:00:00Z'))
     await app.runJob('monthly-post')
     vi.setSystemTime(new Date('2026-12-01T00:30:00Z'))
+    await app.runJob('rescan-monthly-post')
+    await app.fireTrigger('CommentSubmit', replyEvent('t1_reply', 't1_offer', 'bob', 'confirmed'))
+
+    const counted = await app.ctx.redis.get('confirmations:alice')
+    expect(counted === '1' || app.reddit.repliesTo('t1_reply').length > 0).toBe(true)
+  })
+
+  test('a confirmation on the previous thread after the grace window is still rejected, and the rescan ignores that thread', async ({ mocks }) => {
+    const app = await setup(mocks)
+    vi.setSystemTime(new Date('2026-11-30T23:59:55Z'))
+    tradeComments(app)
+    vi.setSystemTime(new Date('2026-12-01T00:00:00Z'))
+    await app.runJob('monthly-post')
+    vi.setSystemTime(new Date('2026-12-01T06:30:00Z'))
+
+    await app.runJob('rescan-monthly-post')
+    await app.fireTrigger('CommentSubmit', replyEvent('t1_reply', 't1_offer', 'bob', 'confirmed'))
+
+    expect(await app.ctx.redis.get('confirmations:alice')).toBeUndefined()
+    expect(await app.ctx.redis.get('confirmations:bob')).toBeUndefined()
+    expect(app.reddit.repliesTo('t1_reply')).toHaveLength(0)
+    expect(app.reddit.calls.filter(c => c.method === 'getComments').some(c => (c.args[0] as { postId: string }).postId === MONTHLY)).toBe(false)
+  })
+
+  test('the trigger within the grace window counts the trade, and the rescan after it does not count it again', async ({ mocks }) => {
+    const app = await setup(mocks)
+    vi.setSystemTime(new Date('2026-11-30T23:59:55Z'))
+    tradeComments(app)
+    vi.setSystemTime(new Date('2026-12-01T00:00:00Z'))
+    await app.runJob('monthly-post')
+    vi.setSystemTime(new Date('2026-12-01T00:10:00Z'))
+    await app.fireTrigger('CommentSubmit', replyEvent('t1_reply', 't1_offer', 'bob', 'confirmed'))
+    await app.fireTrigger('CommentSubmit', replyEvent('t1_reply', 't1_offer', 'bob', 'confirmed'))
+    vi.setSystemTime(new Date('2026-12-01T00:30:00Z'))
+    await app.runJob('rescan-monthly-post')
+    await app.runJob('rescan-monthly-post')
+
+    expect(await app.ctx.redis.get('confirmations:alice')).toBe('1')
+    expect(await app.ctx.redis.get('confirmations:bob')).toBe('1')
+    expect(app.reddit.repliesTo('t1_reply')).toHaveLength(1)
+  })
+
+  test('the rescan within the grace window counts the trade, and a late trigger does not count it again', async ({ mocks }) => {
+    const app = await setup(mocks)
+    vi.setSystemTime(new Date('2026-11-30T23:59:55Z'))
+    tradeComments(app)
+    vi.setSystemTime(new Date('2026-12-01T00:00:00Z'))
+    await app.runJob('monthly-post')
+    vi.setSystemTime(new Date('2026-12-01T00:30:00Z'))
+    await app.runJob('rescan-monthly-post')
+    await app.fireTrigger('CommentSubmit', replyEvent('t1_reply', 't1_offer', 'bob', 'confirmed'))
+    await app.runJob('rescan-monthly-post')
+
+    expect(await app.ctx.redis.get('confirmations:alice')).toBe('1')
+    expect(await app.ctx.redis.get('confirmations:bob')).toBe('1')
+    expect(app.reddit.repliesTo('t1_reply')).toHaveLength(1)
+  })
+
+  test('a failing scan of the previous thread does not stop the rescan of the current one', async ({ mocks }) => {
+    const app = await setup(mocks)
+    vi.setSystemTime(new Date('2026-12-01T00:00:00Z'))
+    await app.runJob('monthly-post')
+    const december = await currentPostId(app)
+    tradeComments(app, december)
+    app.reddit.posts.delete(MONTHLY)
+    vi.setSystemTime(new Date('2026-12-01T00:30:00Z'))
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await app.runJob('rescan-monthly-post')
+
+    expect(await app.ctx.redis.get('confirmations:alice')).toBe('1')
+  })
+
+  test('a rotation retried after the grace window since its first attempt still gives the old thread a grace window once it is locked', async ({ mocks }) => {
+    const app = await setup(mocks)
+    vi.setSystemTime(new Date('2026-12-01T00:00:00Z'))
+    app.reddit.failNext('submitPost', '500 reddit down')
+    await expect(app.runJob('monthly-post')).rejects.toThrow('500')
+    // The old thread stays unlocked and current; a confirmation lands on it shortly before the retry locks it.
+    vi.setSystemTime(new Date('2026-12-01T08:55:00Z'))
+    tradeComments(app)
+    vi.setSystemTime(new Date('2026-12-01T09:00:00Z'))
+    await app.runJob('monthly-post')
+    expect(await currentPostId(app)).not.toBe(MONTHLY)
+    vi.setSystemTime(new Date('2026-12-01T09:30:00Z'))
+
+    await app.runJob('rescan-monthly-post')
+    await app.fireTrigger('CommentSubmit', replyEvent('t1_reply', 't1_offer', 'bob', 'confirmed'))
+
+    const counted = await app.ctx.redis.get('confirmations:alice')
+    expect(counted === '1' || app.reddit.repliesTo('t1_reply').length > 0).toBe(true)
+  })
+
+  test('running the finished rotation again after the grace window does not extend the window', async ({ mocks }) => {
+    const app = await setup(mocks)
+    vi.setSystemTime(new Date('2026-11-30T23:59:55Z'))
+    tradeComments(app)
+    vi.setSystemTime(new Date('2026-12-01T00:00:00Z'))
+    await app.runJob('monthly-post')
+    vi.setSystemTime(new Date('2026-12-01T07:00:00Z'))
+    await app.runJob('monthly-post')
+    vi.setSystemTime(new Date('2026-12-01T07:30:00Z'))
+
+    await app.runJob('rescan-monthly-post')
+    await app.fireTrigger('CommentSubmit', replyEvent('t1_reply', 't1_offer', 'bob', 'confirmed'))
+
+    expect(await app.ctx.redis.get('confirmations:alice')).toBeUndefined()
+    expect(app.reddit.repliesTo('t1_reply')).toHaveLength(0)
+  })
+
+  test('a thread made by hand (no rotation record) still gives the old thread a grace window when it locks it', async ({ mocks }) => {
+    const app = await setup(mocks)
+    vi.setSystemTime(new Date('2026-11-30T23:59:55Z'))
+    tradeComments(app)
+    vi.setSystemTime(new Date('2026-12-01T00:00:00Z'))
+    await app.runJob('monthly-post')
+    const december = await currentPostId(app)
+    await app.ctx.redis.del('previousMonthlyPost')
+    app.reddit.posts.get(MONTHLY)!.locked = false
+    await app.ctx.redis.del('monthlyRotation:swaps:2026-12')
+    await app.ctx.redis.set('currentMonthlyPost', MONTHLY)
+    await app.runJob('monthly-post')
+    expect(await currentPostId(app)).toBe(december)
+    expect(app.reddit.posts.get(MONTHLY)!.locked).toBe(true)
+    vi.setSystemTime(new Date('2026-12-01T00:30:00Z'))
+
     await app.runJob('rescan-monthly-post')
     await app.fireTrigger('CommentSubmit', replyEvent('t1_reply', 't1_offer', 'bob', 'confirmed'))
 
