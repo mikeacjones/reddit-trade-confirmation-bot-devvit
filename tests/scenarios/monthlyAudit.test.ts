@@ -169,8 +169,7 @@ describe('the job at the UTC edge of a month', () => {
     expect(submitted(app)).toBe(1)
   })
 
-  // BUG: an unrecognised date_locale such as "en_US" (underscore) makes renderTitle throw a RangeError, so the monthly job fails every month and never creates the thread, severity medium
-  test.fails('a malformed date_locale setting does not stop the monthly thread from being created', async ({ mocks }) => {
+  test('a malformed date_locale setting does not stop the monthly thread from being created', async ({ mocks }) => {
     const app = await setup(mocks)
     mocks.settings.put('date_locale', 'en_US')
     vi.setSystemTime(new Date('2026-12-01T00:00:00Z'))

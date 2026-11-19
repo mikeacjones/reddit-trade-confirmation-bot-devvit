@@ -207,8 +207,7 @@ describe('renderTitle (src/templates.ts)', () => {
     expect(renderTitle('%Q %%', date)).toBe('%Q %%')
   })
 
-  // BUG: a locale written with an underscore (en_US) makes renderTitle throw a RangeError, so the monthly post cannot be created, severity medium
-  it.fails('copes with a date_locale written as en_US instead of en-US', () => {
+  it('copes with a date_locale written as en_US instead of en-US', () => {
     expect(() => renderTitle('%B', date, 'en_US')).not.toThrow()
   })
 })
