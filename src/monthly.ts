@@ -6,6 +6,17 @@ import { render, renderTitle } from './templates.js'
 import { errorText, expirationFromNow } from './utils.js'
 
 const MONTHLY_POST_CLAIM_TTL_MS = 15 * 60 * 1000
+const MONTHLY_ROTATION_TTL_MS = 45 * 24 * 60 * 60 * 1000
+
+/**
+ * Which steps of one month's rotation are done, kept in Redis so a retry after a partial failure
+ * finishes the outstanding steps instead of assuming the pointer still names the previous thread.
+ */
+interface MonthlyRotation {
+  previousId: string | null
+  sortSet: boolean
+  modmailSent: boolean
+}
 
 interface PreviousMonthlyPost {
   id: string
@@ -25,6 +36,7 @@ interface MonthlyPostCandidate extends PreviousMonthlyPost {
   subredditName: string
   createdAt: Date
   sticky: () => Promise<unknown>
+  setSuggestedCommentSort: (sort: 'NEW') => Promise<unknown>
 }
 
 interface CreatedMonthlyPost {
@@ -61,7 +73,11 @@ async function createOrRefreshMonthlyPost(
   subredditName: string,
   now: Date,
 ): Promise<void> {
-  const previousId = await ctx.redis.get('currentMonthlyPost')
+  const rotationKey = monthlyRotationKey(subredditName, now)
+  let rotation = await loadRotation(ctx, rotationKey)
+  // Once the pointer has moved to this month's thread it names the thread itself, so a retry takes the
+  // previous thread from the rotation record, which was written before the pointer moved.
+  const previousId = rotation ? rotation.previousId : (await ctx.redis.get('currentMonthlyPost')) ?? null
   let previous: { title: string; permalink: string } | null = null
   let previousPost: PreviousMonthlyPost | null = null
   if (previousId) {
@@ -84,8 +100,20 @@ async function createOrRefreshMonthlyPost(
   const existing = botUser ? await findExistingPostForMonth(ctx, subredditName, now, botUser.username, title) : null
   if (existing) {
     await lockPreviousMonthlyPost(ctx, previousPost, existing.id)
-    if (await tryReuseExistingMonthlyPost(ctx, subredditName, existing)) return
+    if (await tryReuseExistingMonthlyPost(ctx, subredditName, existing)) {
+      // Without a record the thread was not made by this rotation logic (older version or by hand),
+      // and its follow-up steps are taken as done.
+      if (rotation) await finishRotation(ctx, rotationKey, rotation, subredditName, existing)
+      return
+    }
   }
+
+  rotation = {
+    previousId: previousId ?? null,
+    sortSet: false,
+    modmailSent: false,
+  }
+  await saveRotation(ctx, rotationKey, rotation)
 
   const post = await submitMonthlyPost(ctx, {
     subredditName,
@@ -98,16 +126,72 @@ async function createOrRefreshMonthlyPost(
   // Point at the new thread before the fallible follow-up calls; otherwise a failure there leaves
   // the pointer on the locked old thread and replies to the new one are rejected for good.
   await ctx.redis.set('currentMonthlyPost', post.id)
-  await redditApiCall(ctx, () => post.setSuggestedCommentSort('NEW'), `set suggested sort for ${post.id}`)
+  await setSortStep(ctx, rotationKey, rotation, post)
   await lockPreviousMonthlyPost(ctx, previousPost, post.id)
   await redditApiCall(ctx, () => post.sticky(), `sticky monthly post ${post.id}`)
+  await sendModmailStep(ctx, rotationKey, rotation, subredditName, post)
+}
 
+/** Finish the steps a retry finds outstanding for a thread that already exists (sticky is done by the caller). */
+async function finishRotation(
+  ctx: JobContext,
+  rotationKey: string,
+  rotation: MonthlyRotation,
+  subredditName: string,
+  post: MonthlyPostCandidate,
+): Promise<void> {
+  await setSortStep(ctx, rotationKey, rotation, post)
+  await sendModmailStep(ctx, rotationKey, rotation, subredditName, post)
+}
+
+async function setSortStep(
+  ctx: JobContext,
+  rotationKey: string,
+  rotation: MonthlyRotation,
+  post: Pick<CreatedMonthlyPost, 'id' | 'setSuggestedCommentSort'>,
+): Promise<void> {
+  if (rotation.sortSet) return
+  await redditApiCall(ctx, () => post.setSuggestedCommentSort('NEW'), `set suggested sort for ${post.id}`)
+  rotation.sortSet = true
+  await saveRotation(ctx, rotationKey, rotation)
+}
+
+async function sendModmailStep(
+  ctx: JobContext,
+  rotationKey: string,
+  rotation: MonthlyRotation,
+  subredditName: string,
+  post: Pick<CreatedMonthlyPost, 'permalink'>,
+): Promise<void> {
+  if (rotation.modmailSent) return
   await redditApiCall(ctx, () => ctx.reddit.modMail.createConversation({
     subredditName,
     subject: 'Monthly thread is up',
     body: `Monthly trade-confirmation thread is live: ${post.permalink}`,
     to: null,
   }), `create monthly post modmail for r/${subredditName}`)
+  rotation.modmailSent = true
+  await saveRotation(ctx, rotationKey, rotation)
+}
+
+async function loadRotation(ctx: JobContext, key: string): Promise<MonthlyRotation | null> {
+  const raw = await ctx.redis.get(key)
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw) as Partial<MonthlyRotation>
+    return {
+      previousId: typeof parsed.previousId === 'string' ? parsed.previousId : null,
+      sortSet: parsed.sortSet === true,
+      modmailSent: parsed.modmailSent === true,
+    }
+  } catch {
+    console.warn(`Ignoring unreadable monthly rotation record ${key}`)
+    return null
+  }
+}
+
+async function saveRotation(ctx: JobContext, key: string, rotation: MonthlyRotation): Promise<void> {
+  await ctx.redis.set(key, JSON.stringify(rotation), { expiration: expirationFromNow(MONTHLY_ROTATION_TTL_MS) })
 }
 
 async function submitMonthlyPost(
@@ -215,6 +299,10 @@ function isGonePostError(error: unknown): boolean {
 
 function monthlyPostClaimKey(subredditName: string, when: Date): string {
   return `monthlyPostClaim:${subredditName.toLowerCase()}:${monthlyPostMonthKey(when)}`
+}
+
+function monthlyRotationKey(subredditName: string, when: Date): string {
+  return `monthlyRotation:${subredditName.toLowerCase()}:${monthlyPostMonthKey(when)}`
 }
 
 function monthlyPostMonthKey(when: Date): string {

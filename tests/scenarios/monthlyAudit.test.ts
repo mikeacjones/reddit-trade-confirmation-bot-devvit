@@ -425,8 +425,7 @@ describe('sticky slots full and partial failures', () => {
     expect(stickied(app)).toEqual([thread])
   })
 
-  // BUG: a retry after the modmail failed reuses the existing thread and returns before the modmail step, so the moderators are never told the thread is up, severity medium
-  test.fails('after a modmail failure the retry sends the modmail', async ({ mocks }) => {
+  test('after a modmail failure the retry sends the modmail', async ({ mocks }) => {
     const app = await setup(mocks)
     app.reddit.failNext('createModmail', '500 modmail down')
     await expect(app.runJob('monthly-post')).rejects.toThrow()
@@ -436,8 +435,7 @@ describe('sticky slots full and partial failures', () => {
     expect(app.reddit.modmail).toHaveLength(1)
   })
 
-  // BUG: when setSuggestedCommentSort fails after the pointer moved, the retry loads the new thread as "previous" (the pointer now names it) and so never unstickies or locks the real previous thread, which stays stickied and unlocked, severity medium
-  test.fails('setting the suggested sort fails: the retry finishes the rotation and locks the previous thread', async ({ mocks }) => {
+  test('setting the suggested sort fails: the retry finishes the rotation and locks the previous thread', async ({ mocks }) => {
     const app = await setup(mocks)
     const originalSubmit = app.reddit.client.submitPost
     let broken = true
@@ -458,6 +456,89 @@ describe('sticky slots full and partial failures', () => {
     expect(submitted(app)).toBe(1)
     expect(app.reddit.posts.get(MONTHLY)).toMatchObject({ locked: true, stickied: false })
     expect(stickied(app)).toEqual([thread])
+  })
+
+  test('the retry after a successful full rotation sends no second modmail and no second thread', async ({ mocks }) => {
+    const app = await setup(mocks)
+    await app.runJob('monthly-post')
+    expect(app.reddit.modmail).toHaveLength(1)
+
+    vi.setSystemTime(new Date('2026-11-30T13:00:00Z'))
+    await app.runJob('monthly-post')
+    await app.runJob('monthly-post')
+
+    expect(app.reddit.modmail).toHaveLength(1)
+    expect(submitted(app)).toBe(1)
+  })
+
+  test('after a modmail failure the retry sends exactly one modmail even if run again', async ({ mocks }) => {
+    const app = await setup(mocks)
+    app.reddit.failNext('createModmail', '500 modmail down')
+    await expect(app.runJob('monthly-post')).rejects.toThrow()
+
+    await app.runJob('monthly-post')
+    await app.runJob('monthly-post')
+
+    expect(app.reddit.modmail).toHaveLength(1)
+  })
+
+  test('stickying fails, then works: the retry locks the previous thread (already done), stickies and sends the modmail once', async ({ mocks }) => {
+    const app = await setup(mocks)
+    const state = failStickyOnNewPosts(app, '500 sticky slots full')
+    await expect(app.runJob('monthly-post')).rejects.toThrow('500')
+    expect(app.reddit.modmail).toHaveLength(0)
+
+    state.broken = false
+    await app.runJob('monthly-post')
+    await app.runJob('monthly-post')
+
+    const thread = await currentPostId(app)
+    expect(stickied(app)).toEqual([thread])
+    expect(app.reddit.posts.get(MONTHLY)).toMatchObject({ locked: true, stickied: false })
+    expect(app.reddit.modmail).toHaveLength(1)
+    expect(submitted(app)).toBe(1)
+  })
+
+  test('setting the suggested sort fails: the retry sets the sort, stickies and sends the modmail once', async ({ mocks }) => {
+    const app = await setup(mocks)
+    const originalSubmit = app.reddit.client.submitPost
+    const sortCalls: string[] = []
+    let broken = true
+    const wrap = <T extends { id: string, setSuggestedCommentSort: (s: 'NEW') => Promise<unknown> }>(post: T): T => {
+      if (post.id === MONTHLY) return post
+      const setSort = post.setSuggestedCommentSort
+      post.setSuggestedCommentSort = async s => { sortCalls.push(post.id); if (broken) throw new Error('500 server error'); return setSort(s) }
+      return post
+    }
+    app.reddit.client.submitPost = async options => wrap(await originalSubmit(options))
+    const originalByUser = app.reddit.client.getPostsByUser
+    app.reddit.client.getPostsByUser = options => {
+      const listing = originalByUser(options)
+      return { all: async () => (await listing.all()).map(wrap) }
+    }
+    await expect(app.runJob('monthly-post')).rejects.toThrow('500')
+
+    broken = false
+    await app.runJob('monthly-post')
+    const callsAfterRetry = sortCalls.length
+    await app.runJob('monthly-post')
+
+    expect(sortCalls).toHaveLength(callsAfterRetry)
+    expect(callsAfterRetry).toBe(2)
+    expect(app.reddit.modmail).toHaveLength(1)
+  })
+
+  test('a new month starts a new rotation: the modmail is sent again and the previous thread is the old pointer', async ({ mocks }) => {
+    const app = await setup(mocks)
+    await app.runJob('monthly-post')
+    const november = await currentPostId(app)
+
+    vi.setSystemTime(new Date('2027-01-01T00:00:00Z'))
+    await app.runJob('monthly-post')
+
+    expect(app.reddit.modmail).toHaveLength(2)
+    expect(app.reddit.posts.get(november)).toMatchObject({ locked: true, stickied: false })
+    expect(stickied(app)).toEqual([await currentPostId(app)])
   })
 })
 
