@@ -102,19 +102,19 @@ REDIS_URL=redis://localhost:6379 npm test
 docker stop swapbot-redis
 ```
 
-(`redis-server` from a package manager works the same: point `REDIS_URL` at it.) In CI, the `devvit-test`
-job needs a Redis service container and the variable:
+(`redis-server` from a package manager works the same: point `REDIS_URL` at it.)
 
-```yaml
-    services:
-      redis:
-        image: redis:7
-        ports: ["6379:6379"]
-        options: >-
-          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
-    env:
-      REDIS_URL: redis://localhost:6379
-```
+In CI nothing needs to be configured: `tests/harness/globalSetup.ts`, registered as `test.globalSetup`
+in `vitest.config.ts`, starts the Redis itself, so the workflow needs no `services:` block or
+`REDIS_URL`. Vitest runs it once in the main process before any test worker starts. When `CI` is set
+and `REDIS_URL` is not, it runs `docker run -d --rm -p 6379:6379 redis:7`, waits up to 30 seconds for
+`docker exec <id> redis-cli ping` to answer `PONG`, and sets `process.env.REDIS_URL` to
+`redis://localhost:6379`. The workers inherit the main process's environment, so the adapter, which
+reads `REDIS_URL` at import time, sees it. Teardown stops the container. If Docker or Redis cannot be
+started in CI, the setup throws and the run fails, so the race scenarios cannot silently skip there.
+Outside CI, or when `REDIS_URL` is already set, it does nothing. The decision logic takes the docker
+calls and the clock as parameters and is tested without Docker in `tests/harness/ciWorkflow.test.ts`.
+`CI=true npm test` runs the same path locally if Docker is available.
 
 Probes that found a bug are kept as `it.fails`/`test.fails` repros with a `// BUG: …, severity …`
 comment, so the suite stays green and flips red when the bug is fixed.
