@@ -48,11 +48,31 @@ async function world(mocks: Parameters<typeof newApp>[0], backend: 'mock' | 'rea
   const app = newApp(mocks)
   seedSwapsWorld(app)
   const redis = instrumentRedis(mocks, { backend })
-  // The bot spaces its comment submissions with a Redis slot that expires after a few real seconds;
-  // free it by hand instead of sleeping through the expiry.
-  redis.before(redisCall('Set', 'reddit:comment-submit-slot'), () => app.ctx.redis.del('reddit:comment-submit-slot'))
+  freeCommentSubmitSlotOnEveryClaim(mocks, app)
   await app.ctx.redis.set('currentMonthlyPost', MONTHLY)
   return { app, redis }
+}
+
+/**
+ * The bot spaces its comment submissions with a Redis slot (`SET … NX`) that expires after a few real
+ * seconds; free it by hand instead of sleeping through the expiry. Freeing and claiming are one
+ * critical section: with two replies in flight, the calls could run `del, del, set, set`, and the
+ * second claim would fail and sleep for the full spacing (seen with a Dockerised Redis).
+ */
+function freeCommentSubmitSlotOnEveryClaim(mocks: Parameters<typeof newApp>[0], app: AppHarness): void {
+  const slot = 'reddit:comment-submit-slot'
+  const plugin = mocks.redis.plugin as unknown as { Set: (request: { key: string }, ...rest: unknown[]) => Promise<unknown> }
+  const claim = plugin.Set.bind(plugin)
+  let queue: Promise<unknown> = Promise.resolve()
+  plugin.Set = (request, ...rest) => {
+    if (request.key !== slot) return claim(request, ...rest)
+    const turn = queue.then(async () => {
+      await app.ctx.redis.del(slot)
+      return claim(request, ...rest)
+    })
+    queue = turn.catch(() => undefined)
+    return turn
+  }
 }
 
 function addOffer(app: AppHarness, id: string, author: string, body: string): void {
