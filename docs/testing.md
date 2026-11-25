@@ -13,7 +13,7 @@ There are two kinds of tests:
 
 ## Outcome of the `@devvit/test` spike
 
-`@devvit/test` 0.15.4 (a devDependency pinned to the same version as `@devvit/public-api`) **can**
+`@devvit/test` 0.15.6 (a devDependency pinned to the same version as `@devvit/public-api`) **can**
 drive this Blocks app end to end for everything except the Reddit API. The one thing it cannot do
 is act as the Reddit API for this app, so that side is a small in-repo fake. A real Redis is needed only
 for the race scenarios.
